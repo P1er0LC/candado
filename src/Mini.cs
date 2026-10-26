@@ -1,13 +1,18 @@
 // La ventanita que abre el acceso «Desbloquear con Candado» de una carpeta bloqueada (y el
 // clic derecho, si la app no está abierta): solo la contraseña, el avance y un mensaje de
 // listo o de error. Sobre una carpeta desbloqueada, la bloquea; si quedó a medias, la termina.
+// El vigilante la abre encima de la ventana del Explorador en la que alguien entró a una
+// carpeta que pide la contraseña cada vez; ahí, al desbloquear, se cierra sola.
 using System;
 using System.Diagnostics;
 using System.IO;
+using System.Linq;
+using System.Runtime.InteropServices;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Interop;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using System.Windows.Threading;
@@ -18,7 +23,7 @@ namespace Candado
     {
         public readonly Window Window;
         readonly string carpeta, nombre;
-        readonly bool enCaptura;
+        readonly bool enCaptura, vigilada;
         string modo;                     // desbloquear | recuperar | bloquear | terminar | listo
         CancellationTokenSource cancelacion;
         bool trabajando;
@@ -26,10 +31,18 @@ namespace Candado
 
         const string IconoCandado = "", IconoAbierto = "", IconoAviso = "", IconoListo = "";
 
-        public Mini(string carpeta, string captura, string pantalla)
+        [DllImport("user32.dll")] static extern IntPtr GetForegroundWindow();
+        [DllImport("user32.dll")] static extern uint GetWindowThreadProcessId(IntPtr ventana, IntPtr proceso);
+        [DllImport("kernel32.dll")] static extern uint GetCurrentThreadId();
+        [DllImport("user32.dll")] static extern bool AttachThreadInput(uint hilo, uint con, bool unir);
+        [DllImport("user32.dll")] static extern bool SetForegroundWindow(IntPtr ventana);
+
+        // explorador: la ventana del Explorador sobre la que la abre el vigilante.
+        public Mini(string carpeta, string captura, string pantalla, IntPtr explorador = default(IntPtr))
         {
             this.carpeta = carpeta;
             nombre = Path.GetFileName(carpeta);
+            vigilada = explorador != IntPtr.Zero;
             Window = Tema.Cargar("Mini.xaml");
             E<TextBlock>("Ruta").Text = carpeta;
             E<Button>("Principal").Click += async delegate { await Aceptar(); };
@@ -52,6 +65,26 @@ namespace Candado
                 Window.WindowStartupLocation = WindowStartupLocation.Manual;
                 Window.Left = -20000; Window.Top = 0; Window.ShowInTaskbar = false; Window.ShowActivated = false;
             }
+            else if (vigilada)
+            {
+                new WindowInteropHelper(Window).Owner = explorador;
+                Window.WindowStartupLocation = WindowStartupLocation.CenterOwner;
+                Window.Loaded += delegate { Traer(); };
+            }
+        }
+
+        // Al frente aunque la abra un proceso de segundo plano: Windows solo deja pasar al frente
+        // a quien tiene el teclado, así que se une un momento al hilo de la ventana activa.
+        public void Traer()
+        {
+            if (enCaptura) return;
+            if (Window.WindowState == WindowState.Minimized) Window.WindowState = WindowState.Normal;
+            IntPtr propia = new WindowInteropHelper(Window).Handle;
+            uint activo = GetWindowThreadProcessId(GetForegroundWindow(), IntPtr.Zero), este = GetCurrentThreadId();
+            bool unido = activo != 0 && activo != este && AttachThreadInput(este, activo, true);
+            SetForegroundWindow(propia);
+            Window.Activate();
+            if (unido) AttachThreadInput(este, activo, false);
         }
 
         T E<T>(string n) where T : class { return (T)Window.FindName(n); }
@@ -94,6 +127,7 @@ namespace Candado
             Cofre c;
             try { c = new Cofre(carpeta); }
             catch (Exception ex) { Final("No se pudo abrir la carpeta", ex.Message); return; }
+            if (vigilada && c.Estado != Estados.Bloqueada) { Window.Close(); return; }   // alguien se adelantó
             if (c.Estado == Estados.Bloqueada)
             {
                 modo = "desbloquear";
@@ -197,7 +231,9 @@ namespace Candado
                     else c.Desbloquear(llave, avance, token);
                 });
                 trabajando = false;
-                if (new Cofre(carpeta).Estado == Estados.Desbloqueada)
+                Cofre despues = new Cofre(carpeta);
+                if (despues.Estado == Estados.Desbloqueada && despues.CadaVez) Pasar();
+                else if (despues.Estado == Estados.Desbloqueada)
                     Listo("«" + nombre + "» desbloqueada", "Listo: tus archivos ya están a la vista. Para bloquearla otra vez: clic derecho sobre la carpeta → Candado.", true);
                 else
                     Listo("«" + nombre + "» bloqueada", "Listo. Para volver a entrar, abre «Desbloquear con Candado» dentro de la carpeta.", false);
@@ -228,6 +264,20 @@ namespace Candado
             Cabeza(titulo, IconoListo, "Ok");
             Mensaje(texto, "Ok");
             Botones(abierta ? "Abrir la carpeta" : null, "Cerrar", false);
+        }
+
+        // Desbloqueada una que pide la contraseña cada vez: se ve en el Explorador (si no estaba
+        // abierta, se abre) y la ventanita se va sola. Al cerrar la carpeta, el vigilante la bloquea.
+        void Pasar()
+        {
+            Listo("«" + nombre + "» desbloqueada", "Listo. Al cerrar la carpeta se vuelve a bloquear sola.", false);
+            if (enCaptura) return;
+            if (Vigia.Ventanas().Any(v => Vigia.Dentro(v.Ruta, carpeta))) Vigia.Refrescar(carpeta);
+            else Process.Start("explorer.exe", "\"" + carpeta + "\"");
+            Programa.AsegurarVigilante();
+            DispatcherTimer irse = new DispatcherTimer { Interval = TimeSpan.FromSeconds(1.5) };
+            irse.Tick += delegate { irse.Stop(); Window.Close(); };
+            irse.Start();
         }
 
         void Final(string titulo, string texto)

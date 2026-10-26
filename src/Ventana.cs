@@ -36,6 +36,7 @@ namespace Candado
         public string Nombre { get; set; }
         public string Tipo { get; set; }   // bloqueada | desbloqueada | interrumpida | perdida | sinproteccion
         public bool SoloAcceso { get; set; }
+        public bool CadaVez { get; set; }
         public string Detalle { get { return detalle; } set { detalle = value; Avisar("Detalle"); } }
         public string Estado { get { return estado; } set { estado = value; Avisar("Estado"); } }
         public string FondoEstado { get { return fondoEstado; } set { fondoEstado = value; Avisar("FondoEstado"); } }
@@ -63,6 +64,7 @@ namespace Candado
         bool recibioCarpeta, enCaptura;
 
         const string IconoCandado = "\uE72E", IconoAbierto = "\uE785", IconoAviso = "\uE7BA", IconoCarpeta = "\uE8B7";
+        const string TextoCadaVez = "Pedir la contrase\u00F1a cada vez que la abro";
 
         // ------------------------------------------------------------ armado
 
@@ -85,6 +87,7 @@ namespace Candado
 
             cfg = Datos.Cargar();
             Refrescar();
+            if (captura == null && filas.Any(f => f.CadaVez)) Programa.AsegurarVigilante();
 
             if (captura == null && carpetaInicial != null)
                 Window.ContentRendered += delegate { AbrirCarpeta(carpetaInicial); };
@@ -134,7 +137,11 @@ namespace Candado
         Fila NuevaFila(string ruta)
         {
             Fila f = new Fila { Ruta = ruta, Nombre = Path.GetFileName(ruta), Detalle = ruta };
-            try { f.SoloAcceso = Cofre.EstaProtegida(ruta) && new Cofre(ruta).SoloAcceso; } catch (Exception) { }
+            try
+            {
+                if (Cofre.EstaProtegida(ruta)) { Cofre c = new Cofre(ruta); f.SoloAcceso = c.SoloAcceso; f.CadaVez = c.CadaVez; }
+            }
+            catch (Exception) { }
             PonerTipo(f, TipoDe(ruta));
             return f;
         }
@@ -174,7 +181,7 @@ namespace Candado
             Task.Run(() => { try { return new Cofre(ruta).Tamano(); } catch { return -1L; } })
                 .ContinueWith(t => Window.Dispatcher.BeginInvoke(new Action(() =>
                 {
-                    f.Detalle = ruta + "  ·  " + Tamano(t.Result) + (f.SoloAcceso ? "  ·  solo bloquea el acceso" : "");
+                    f.Detalle = ruta + "  ·  " + Tamano(t.Result) + (f.SoloAcceso ? "  ·  solo acceso" : "") + (f.CadaVez ? "  ·  pide contraseña cada vez" : "");
                 })));
         }
 
@@ -481,18 +488,20 @@ namespace Candado
                 "Sin la contraseña nadie puede verlos, ni llevándose el disco. Bloquear y desbloquear tarda según cuánto pese.", true);
             RadioButton acceso = CampoOpcion("Solo bloquear el acceso",
                 "Al instante y sin tocar los archivos, pero alguien con permisos de administrador o que sepa cambiar permisos puede entrar igual.", false);
+            CheckBox cadaVez = CampoCasilla(TextoCadaVez, true);
             PasswordBox p1 = CampoClave("Contraseña (al menos " + Cofre.LargoMinimo + " caracteres)");
             PasswordBox p2 = CampoClave("Repítela");
             alAceptar = async () =>
             {
                 ValidarNueva(p1.Password, p2.Password);
                 string clave1 = p1.Password;
-                bool soloAcceso = acceso.IsChecked == true;
+                bool soloAcceso = acceso.IsChecked == true, siempre = cadaVez.IsChecked == true;
                 Mensaje("Preparando…", false);
                 List<string> otras = cfg.Carpetas.ToList();
-                string clave = await Task.Run(() => Cofre.Crear(ruta, clave1, otras, soloAcceso));
+                string clave = await Task.Run(() => Cofre.Crear(ruta, clave1, otras, soloAcceso, siempre));
                 Datos.Agregar(cfg, ruta);
                 Refrescar();
+                if (siempre && !enCaptura) Programa.AsegurarVigilante();
                 string envio = null;
                 if (cfg.CorreoListo)
                 {
@@ -511,7 +520,8 @@ namespace Candado
             string texto = envio == "ok" ? "Te la mandé a " + cfg.Destinatario + ". Guarda ese correo. " + guardala
                 : envio == null ? "No configuraste el correo, así que solo la ves aquí: anótala o guárdala ahora. " + guardala
                 : "No se pudo mandar por correo (" + envio.TrimEnd('.') + "). Anótala o guárdala ahora. " + guardala;
-            Capa("Clave de recuperación de «" + f.Nombre + "»", texto, "Bloquear ahora", null, "Más tarde");
+            // La que pide la contraseña cada vez se bloquea sola en cuanto no está abierta.
+            Capa("Clave de recuperación de «" + f.Nombre + "»", texto, "Bloquear ahora", null, f.CadaVez ? "Cerrar" : "Más tarde");
             TextBox t = CampoTexto(null, clave);
             t.IsReadOnly = true; t.FontFamily = new FontFamily("Cascadia Mono, Consolas"); t.FontSize = 15;
             t.TextWrapping = TextWrapping.Wrap; t.TextAlignment = TextAlignment.Center;
@@ -557,8 +567,17 @@ namespace Candado
                 Mensaje("Comprobando…", false);
                 byte[] llave = await Task.Run(() => c.LlaveConContrasena(clave));
                 CerrarCapa();
-                await Operar(f, "Desbloqueando", (av, ct) => c.Desbloquear(llave, av, ct), "quedó desbloqueada");
+                if (await Operar(f, "Desbloqueando", (av, ct) => c.Desbloquear(llave, av, ct), "quedó desbloqueada")) AbrirSiCadaVez(c);
             };
+        }
+
+        // Si pide la contraseña cada vez, al desbloquearla se abre: cerrada, el vigilante la
+        // vuelve a bloquear en unos segundos.
+        void AbrirSiCadaVez(Cofre c)
+        {
+            if (!c.CadaVez || enCaptura) return;
+            Process.Start("explorer.exe", "\"" + c.Carpeta + "\"");
+            Programa.AsegurarVigilante();
         }
 
         void Terminar(Fila f)
@@ -604,7 +623,7 @@ namespace Candado
                 await Task.Run(() => c.PonerContrasena(llave, nueva));
                 CerrarCapa();
                 if (c.Estado == Estados.Desbloqueada) Aviso("Listo", "«" + f.Nombre + "» ya tiene tu contraseña nueva.");
-                else await Operar(f, "Desbloqueando", (av, ct) => c.Desbloquear(llave, av, ct), "quedó desbloqueada con tu contraseña nueva");
+                else if (await Operar(f, "Desbloqueando", (av, ct) => c.Desbloquear(llave, av, ct), "quedó desbloqueada con tu contraseña nueva")) AbrirSiCadaVez(c);
             };
         }
 
@@ -635,6 +654,20 @@ namespace Candado
                 CampoBoton("Abrir la carpeta", "BotonSecundario", () => { CerrarCapa(); Process.Start("explorer.exe", "\"" + f.Ruta + "\""); });
             if (f.Tipo == "bloqueada" || f.Tipo == "desbloqueada" || f.Tipo == "interrumpida")
             {
+                CheckBox cadaVez = CampoCasilla(TextoCadaVez, f.CadaVez);
+                cadaVez.Margin = new Thickness(0, 14, 0, 6);
+                cadaVez.Click += delegate
+                {
+                    bool v = cadaVez.IsChecked == true;
+                    try
+                    {
+                        new Cofre(f.Ruta).PonerCadaVez(v);
+                        f.CadaVez = v;
+                        MedirTamano(f);
+                        if (v && !enCaptura) Programa.AsegurarVigilante();
+                    }
+                    catch (Exception ex) { cadaVez.IsChecked = !v; Mensaje(ex is ErrorCandado ? ex.Message : "Algo falló: " + ex.Message, true); }
+                };
                 CampoBoton("Cambiar la contraseña", "BotonSecundario", () => CambiarContrasena(f));
                 CampoBoton("Olvidé la contraseña", "BotonSecundario", () => Recuperar(f));
                 CampoBoton("Quitar la protección", "BotonSecundario", () => QuitarProteccion(f)).Foreground = Pincel(tema["Peligro"]);

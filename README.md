@@ -3,8 +3,8 @@
 Contraseña para carpetas de Windows, sin moverlas de donde están.
 
 Bloqueada, una carpeta se ve en el Explorador con un candado en el ícono, y nadie puede ver
-lo que tiene adentro: al abrirla solo aparece «Desbloquear con Candado», que pide la
-contraseña. Desbloqueada, vuelve a estar como siempre, con sus nombres, fechas y atributos.
+lo que tiene adentro. Le das doble clic, sale una ventanita que pide la contraseña, entras,
+y al cerrar la carpeta se vuelve a bloquear sola: la próxima vez, de nuevo la contraseña.
 Si olvidas la contraseña, la recuperas con una clave que te llega por correo.
 
 ![Lista de carpetas protegidas](docs/lista.png)
@@ -41,11 +41,16 @@ curiosidad. Para algo que de verdad tiene que quedar privado, usa el cifrado.
 
 <img src="docs/carpeta-bloqueada.png" alt="Ícono de una carpeta bloqueada" width="64" align="right">
 
-- **Doble clic.** Una carpeta bloqueada se abre, pero adentro solo están
-  «Desbloquear con Candado» y una nota. Con doble clic en «Desbloquear con Candado» sale
-  una ventanita que pide la contraseña: si no es, lo dice en rojo y deja intentarlo de
-  nuevo; si es, desbloquea y avisa en verde, con un botón para abrir la carpeta. Desde ahí
-  también está «Olvidé mi contraseña».
+- **Doble clic, con «Pedir la contraseña cada vez que la abro»** (viene marcada al
+  protegerla, y se cambia en «⋯» de cada carpeta). Al entrar a la carpeta sale encima la
+  ventanita de la contraseña: si no es, lo dice en rojo y deja intentarlo de nuevo; si es,
+  avisa en verde y ya ves tus archivos. Al cerrar la ventana de la carpeta (o salir de ella),
+  a los 5 segundos se vuelve a bloquear sola. Así hasta que desmarques la opción o le quites
+  la protección.
+- **Doble clic, sin esa opción.** Bloqueada, adentro solo están «Desbloquear con Candado» y
+  una nota. Con doble clic en «Desbloquear con Candado» sale la misma ventanita; desbloqueada,
+  la carpeta queda abierta hasta que la vuelvas a bloquear. En las dos está «Olvidé mi
+  contraseña».
 - **Clic derecho → «Candado: bloquear o desbloquear».** Hace lo que corresponde: si la
   carpeta no está protegida, abre «Proteger»; si está bloqueada, abre la misma ventanita;
   si está desbloqueada, la bloquea; si quedó a medias, la termina. También funciona con
@@ -79,7 +84,12 @@ escritorio, y con la opción en el clic derecho de las carpetas. Todo es solo pa
 usuario: no pide permisos de administrador. Para actualizarla, cierra Candado, haz
 `git pull` y vuelve a correr `instalar.ps1`.
 
-`desinstalar.ps1` quita el programa, los accesos y la opción del clic derecho. No toca tus
+También deja arrancando con Windows el **vigilante** (`Candado.exe --vigilar`, sin
+ventana): es el que saca la ventanita al abrir una carpeta que pide la contraseña cada vez y
+la vuelve a bloquear al cerrarla. Mira las ventanas del Explorador dos veces por segundo; si
+no tienes carpetas así, se cierra solo a los 30 segundos.
+
+`desinstalar.ps1` quita el programa, los accesos, la opción del clic derecho y el vigilante. No toca tus
 carpetas ni tus ajustes: una carpeta que quedó bloqueada sigue bloqueada, y para abrirla
 hay que volver a instalar Candado.
 
@@ -137,6 +147,18 @@ puede abrirla: conviene tener activada la verificación en dos pasos en la cuent
   personales enteras (Documentos, Escritorio, Imágenes…), las que están en OneDrive y las
   que tienen enlaces o uniones adentro.
 - **Correo:** se conecta con STARTTLS (puerto 587); el 465 no lo admite.
+- **Pedir la contraseña cada vez:**
+  - Solo cuentan las ventanas del Explorador. Si abriste un archivo desde Photoshop u otro
+    programa y cerraste la carpeta, se bloquea igual.
+  - Si un archivo sigue abierto en otro programa, espera y vuelve a intentarlo cada 15
+    segundos.
+  - Si guardas un archivo en la carpeta después de que se bloqueó, ese archivo queda a la
+    vista hasta la próxima vez que la abras y la cierres. No se pierde nada: si choca con
+    uno de adentro, el de adentro vuelve como «nombre (desbloqueado)».
+  - Con el cifrado, cada cierre vuelve a cifrar toda la carpeta: para carpetas grandes
+    conviene «Solo bloquear el acceso», que es al instante.
+  - Si el vigilante no está corriendo, la carpeta no se vuelve a bloquear sola. La ventana
+    de Candado lo arranca al abrirse.
 - **Modo acceso:** tu cuenta de Windows tiene que ser la dueña de la carpeta (si no lo es,
   Candado intenta serlo, y si no puede, te pide usar el cifrado). Mover lo de adentro a
   `.candado` es instantáneo porque no sale del disco; si algún archivo está abierto en
@@ -169,13 +191,15 @@ src/Ajustes.cs    configuración, lista de carpetas y envío del correo
 src/Ventana.cs    la ventana (WPF); el diseño está en src/Ventana.xaml
 src/Mini.cs       la ventanita de «Desbloquear con Candado»; el diseño está en src/Mini.xaml
 src/Tema.cs       colores claros u oscuros y los estilos compartidos (src/Estilos.xaml)
+src/Vigia.cs      cuándo pedir la contraseña y cuándo volver a bloquear, según las ventanas del Explorador
+src/Vigilante.cs  el proceso de segundo plano que usa Vigia (--vigilar)
 pruebas/          pruebas del núcleo
 ```
 
 ```powershell
 .\compilar.ps1                             # dist\Candado.exe y dist\pruebas.exe
-.\dist\pruebas.exe D:\candado-pruebas      # 20 pruebas: los dos modos, cortes, alteraciones, correo falso
-.\probar-ventana.ps1                       # capturas de cada pantalla y flujos reales con datos de demo
+.\dist\pruebas.exe D:\candado-pruebas      # 23 pruebas: los dos modos, cortes, alteraciones, vigilante, correo falso
+.\probar-ventana.ps1                       # capturas de cada pantalla, flujos reales con datos de demo y el vigilante con el Explorador
 ```
 
 La carpeta de pruebas no puede estar dentro de AppData, porque Candado no deja proteger

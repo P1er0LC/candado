@@ -57,6 +57,27 @@ $w = "$demo\Ventanita (acceso)"
 Capturar 'mini-listo' $datos 'mini-listo-acceso' "--carpeta `"$w`""
 'Ventanita (acceso) desbloqueada idéntica: {0} · acceso: {1}' -f ((Huella $w) -eq $referencia), (Acceso $w)
 
+# El vigilante con el Explorador de verdad: al abrir «Vigilada» sale la ventanita (aquí pone
+# sola la contraseña de prueba) y al cerrar la ventana la carpeta se vuelve a bloquear.
+function Estado([string]$Dir) { (Get-Content -LiteralPath "$Dir\.candado\cabecera.json" -Raw | ConvertFrom-Json).Estado }
+function Esperar([string]$Dir, [string]$Estado) {
+    $t = [Diagnostics.Stopwatch]::StartNew()
+    while ((Estado $Dir) -ne $Estado -and $t.Elapsed.TotalSeconds -lt 30) { Start-Sleep -Milliseconds 300 }
+    '{0} ({1:N1} s)' -f (Estado $Dir), $t.Elapsed.TotalSeconds
+}
+$x = "$demo\Vigilada"
+$png = Join-Path $Salida 'vigilante-listo.png'
+Remove-Item $png -ErrorAction SilentlyContinue
+$vigilante = Start-Process "$dist\Candado.exe" -ArgumentList "--vigilar --datos `"$datos`" --captura `"$png`" --pantalla mini-listo" -PassThru
+Start-Sleep -Seconds 2
+& "$dist\pruebas.exe" --abrir $x
+'Vigilada: al abrirla quedó ' + (Esperar $x 'desbloqueada')
+Start-Sleep -Seconds 1
+& "$dist\pruebas.exe" --cerrar $x
+'Vigilada: al cerrarla quedó ' + (Esperar $x 'bloqueada') + ' · captura de la ventanita: ' + (Test-Path $png)
+'Vigilada idéntica tras abrir y cerrar: ' + ($(& "$dist\pruebas.exe" --abrir $x; Esperar $x 'desbloqueada' | Out-Null; $h = Huella $x; & "$dist\pruebas.exe" --cerrar $x; Esperar $x 'bloqueada' | Out-Null; $h) -eq $referencia)
+Stop-Process -Id $vigilante.Id -ErrorAction SilentlyContinue
+
 # Clic derecho: lo que llega con --carpeta.
 Capturar 'carpeta' $datos 'clic-bloqueada' "--carpeta `"$demo\Clientes 2026`""
 New-Item -ItemType Directory -Force "$demo\Sin proteger" | Out-Null

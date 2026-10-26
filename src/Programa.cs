@@ -1,12 +1,14 @@
 // Punto de entrada. --carpeta <ruta> es lo que mandan el clic derecho del Explorador y el
 // acceso «Desbloquear con Candado»: si Candado ya está abierta, se la pasa a esa ventana por
 // una tubería con nombre y termina; si no, una carpeta protegida abre la ventanita (Mini) y
-// una sin proteger, la ventana completa para protegerla.
+// una sin proteger, la ventana completa para protegerla. --vigilar es el vigilante de las
+// carpetas que piden la contraseña cada vez (arranca con Windows; ver Vigilante).
 // Solo para probarla: --datos <carpeta> (en vez de %APPDATA%\Candado), --instancia <nombre>
 // (otra ventana única, para probar el paso de carpetas) y --captura <png> --pantalla <nombre>
 // (dibuja la ventana fuera de la pantalla, guarda la imagen y cierra; las pantallas «mini…»
 // son de la ventanita y necesitan --carpeta).
 using System;
+using System.Diagnostics;
 using System.IO;
 using System.IO.Pipes;
 using System.Net;
@@ -24,13 +26,17 @@ namespace Candado
         [DllImport("user32.dll")]
         static extern bool AllowSetForegroundWindow(int proceso);
 
+        static string instancia;
+
         [STAThread]
         static int Main(string[] args)
         {
-            string captura = null, pantalla = "lista", carpeta = null, instancia = null;
+            string captura = null, pantalla = "lista", carpeta = null;
+            bool vigilar = false;
             for (int i = 0; i < args.Length; i++)
             {
-                if (args[i] == "--datos" && i + 1 < args.Length) Datos.Dir = args[++i];
+                if (args[i] == "--vigilar") vigilar = true;
+                else if (args[i] == "--datos" && i + 1 < args.Length) Datos.Dir = args[++i];
                 else if (args[i] == "--captura" && i + 1 < args.Length) captura = args[++i];
                 else if (args[i] == "--pantalla" && i + 1 < args.Length) pantalla = args[++i];
                 else if (args[i] == "--carpeta" && i + 1 < args.Length)
@@ -49,20 +55,33 @@ namespace Candado
             using (MemoryStream m = new MemoryStream()) { s.CopyTo(m); Cofre.IconoCarpeta = m.ToArray(); }
             Cofre.RutaApp = Assembly.GetExecutingAssembly().Location;
 
+            if (vigilar)
+            {
+                bool primerVigilante;
+                using (Mutex unico = new Mutex(true, NombreVigilante(), out primerVigilante))
+                {
+                    if (!primerVigilante) return 0;
+                    Application app = Nueva(false);
+                    app.ShutdownMode = ShutdownMode.OnExplicitShutdown;
+                    new Vigilante(captura, pantalla).Empezar();
+                    return app.Run();
+                }
+            }
+
             string protegida = null;
             if (carpeta != null && (captura == null || pantalla.StartsWith("mini")))
             {
                 try { protegida = Cofre.ProtegidaDe(carpeta, Datos.Cargar().Carpetas); } catch (Exception) { }
             }
-            if (protegida != null && (captura != null || !Abierta(instancia)))
+            if (protegida != null && (captura != null || !Existe(@"Local\" + instancia)))
             {
                 // Una sola ventanita por carpeta, aunque le den doble clic dos veces.
                 bool primeraMini;
-                using (Mutex unica = new Mutex(true, @"Local\" + instancia + "-mini-" + Huella(protegida), out primeraMini))
+                using (Mutex unica = new Mutex(true, NombreMini(protegida), out primeraMini))
                 {
                     if (!primeraMini) return 0;
                     if (captura == null) Datos.Agregar(Datos.Cargar(), protegida);
-                    return Nueva().Run(new Mini(protegida, captura, pantalla).Window);
+                    return Nueva(true).Run(new Mini(protegida, captura, pantalla).Window);
                 }
             }
 
@@ -75,28 +94,49 @@ namespace Candado
                     MessageBox.Show("Candado ya está abierto.", "Candado", MessageBoxButton.OK, MessageBoxImage.Information);
                     return 0;
                 }
-                Application app = Nueva();
+                Application app = Nueva(true);
                 Ventana v = new Ventana(captura, pantalla, carpeta);
                 Escuchar(tuberia, v);
                 return app.Run(v.Window);
             }
         }
 
-        static Application Nueva()
+        // avisar: el vigilante no muestra los errores (corre en segundo plano y vuelve a intentar).
+        static Application Nueva(bool avisar)
         {
             Application app = new Application();
             app.DispatcherUnhandledException += (s, e) =>
             {
-                MessageBox.Show("Algo falló: " + e.Exception.Message, "Candado", MessageBoxButton.OK, MessageBoxImage.Error);
+                if (avisar) MessageBox.Show("Algo falló: " + e.Exception.Message, "Candado", MessageBoxButton.OK, MessageBoxImage.Error);
                 e.Handled = true;
             };
             return app;
         }
 
-        static bool Abierta(string instancia)
+        // Una sola ventanita por carpeta, la abra el acceso, el clic derecho o el vigilante.
+        public static string NombreMini(string carpeta)
+        {
+            return @"Local\" + instancia + "-mini-" + Huella(carpeta);
+        }
+
+        // Un vigilante por cada lista de carpetas (las pruebas usan otra con --datos).
+        static string NombreVigilante()
+        {
+            return @"Local\Candado-vigilante-" + Huella(Datos.Dir.TrimEnd('\\'));
+        }
+
+        // Lo arranca si no está corriendo: lo necesitan las carpetas que piden la contraseña cada vez.
+        public static void AsegurarVigilante()
+        {
+            if (Existe(NombreVigilante())) return;
+            try { Process.Start(Cofre.RutaApp, "--vigilar --datos \"" + Datos.Dir.TrimEnd('\\') + "\""); }
+            catch (Exception) { }
+        }
+
+        static bool Existe(string mutex)
         {
             Mutex m;
-            if (!Mutex.TryOpenExisting(@"Local\" + instancia, out m)) return false;
+            if (!Mutex.TryOpenExisting(mutex, out m)) return false;
             m.Dispose();
             return true;
         }

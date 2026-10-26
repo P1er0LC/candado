@@ -31,6 +31,10 @@ static class Pruebas
         if (args.Length >= 1 && args[0] == "--hijo") return Hijo(args);
         if (args.Length >= 1 && args[0] == "--medir") return Medir(args.Length > 1 ? args[1] : Path.GetTempPath());
         if (args.Length >= 3 && args[0] == "--demo") return Demo(args[1], args[2]);
+        // Para probar el vigilante con el Explorador de verdad: abre la carpeta minimizada y sin
+        // quitarle el teclado a nadie, o cierra las ventanas que la muestran.
+        if (args.Length >= 2 && args[0] == "--abrir") { ShellExecute(IntPtr.Zero, "open", args[1], null, null, 7); return 0; }   // SW_SHOWMINNOACTIVE
+        if (args.Length >= 2 && args[0] == "--cerrar") { Vigia.Cerrar(args[1]); return 0; }
         if (args.Length >= 1 && args[0] == "--correo") { Directory.CreateDirectory(Path.GetTempPath()); trabajo = Path.GetTempPath(); ProbarCorreo(); return 0; }
         trabajo = args.Length > 0 ? args[0] : Path.Combine(Path.GetTempPath(), "candado-pruebas");
         if (Directory.Exists(trabajo)) BorrarTodo(trabajo);
@@ -55,6 +59,9 @@ static class Pruebas
         Probar("Corte (proceso matado) mientras se desbloquea", () => ProbarCorte("desbloquear"));
         Probar("Sobrescribir originales al bloquear", ProbarSobrescribir);
         Probar("Quitar la protección", ProbarQuitar);
+        Probar("Pedir la contraseña cada vez: cuándo pide y cuándo vuelve a bloquear", ProbarVigia);
+        Probar("Una sola operación a la vez por carpeta", ProbarReserva);
+        Probar("Leer las ventanas del Explorador", () => Console.WriteLine("      ventanas del Explorador abiertas: " + Vigia.Ventanas().Count));
         Probar("Carpetas que no se dejan proteger", ProbarValidar);
         Probar("Correo de recuperación (servidor SMTP falso)", ProbarCorreo);
         Probar("Velocidad con un archivo de 300 MB", ProbarVelocidad);
@@ -74,6 +81,9 @@ static class Pruebas
     }
 
     static void Afirmar(bool c, string que) { if (!c) throw new Exception(que); }
+
+    [System.Runtime.InteropServices.DllImport("shell32.dll", CharSet = System.Runtime.InteropServices.CharSet.Unicode)]
+    static extern IntPtr ShellExecute(IntPtr ventana, string operacion, string archivo, string parametros, string carpeta, int mostrar);
 
     static void Espera<T>(Action a, string contiene) where T : Exception
     {
@@ -320,7 +330,9 @@ static class Pruebas
         Afirmar(new Cofre(c).PuedeSinContrasena, "debería poder sin contraseña");
         new Cofre(c).Bloquear(null, Nada, false);
         Afirmar(!new Cofre(c).PuedeSinContrasena, "bloqueada no debería");
-        Espera<ErrorCandado>(() => new Cofre(c).Bloquear(null, Nada, false), "Hace falta la contraseña");   // bloqueada ya no guarda la llave de Windows
+        Afirmar(new Cofre(c).LlaveDeWindows() == null, "bloqueada sigue guardando la llave de Windows");
+        new Cofre(c).Bloquear(null, Nada, false);   // ya bloqueada: no hace nada (la ventana y el vigilante pueden coincidir)
+        ComprobarBloqueada(c);
         new Cofre(c).Desbloquear(Clave1, null, Nada);
         new Cofre(c).Bloquear(null, Nada, false);   // de nuevo sin contraseña
         ComprobarBloqueada(c);
@@ -462,6 +474,94 @@ static class Pruebas
         new Cofre(c).Bloquear(null, Nada, true);
         ComprobarBloqueada(c);
         new Cofre(c).Desbloquear(Clave1, null, Nada);
+        Afirmar(Huella(c) == antes, "no volvió idéntica");
+    }
+
+    static void Pasada(Vigia v, string c, DateTime t, out List<VentanaExplorador> pedir, out List<string> bloquear, params VentanaExplorador[] ventanas)
+    {
+        pedir = new List<VentanaExplorador>();
+        bloquear = new List<string>();
+        v.Pasada(new[] { c }, ventanas, new List<string>(), t, pedir, bloquear);
+    }
+
+    // El vigilante con ventanas inventadas: pide la contraseña al entrar y no insiste mientras
+    // sigue adentro; sin ventanas, bloquea pasada la espera, y si un archivo está abierto
+    // reintenta más tarde.
+    static void ProbarVigia()
+    {
+        string c = NuevaCarpeta("cada vez");
+        string antes = Huella(c, true);
+        Cofre.Crear(c, Clave1, null, true, true);
+        Afirmar(new Cofre(c).CadaVez, "no quedó marcada «cada vez»");
+        new Cofre(c).Bloquear(null, Nada, false);
+        Vigia v = new Vigia();
+        DateTime t = new DateTime(2026, 10, 26, 12, 0, 0);
+        IntPtr w = new IntPtr(4242);
+        VentanaExplorador enLaCarpeta = new VentanaExplorador { Hwnd = w, Ruta = c };
+        VentanaExplorador adentro = new VentanaExplorador { Hwnd = w, Ruta = Path.Combine(c, "Fotos ñandú") };
+        VentanaExplorador afuera = new VentanaExplorador { Hwnd = w, Ruta = trabajo };
+        List<VentanaExplorador> pedir;
+        List<string> bloquear;
+
+        Pasada(v, c, t, out pedir, out bloquear, afuera);
+        Afirmar(pedir.Count == 0 && bloquear.Count == 0, "hizo algo sin que nadie entrara");
+        Pasada(v, c, t.AddSeconds(1), out pedir, out bloquear, enLaCarpeta);
+        Afirmar(pedir.Count == 1 && pedir[0].Hwnd == w && pedir[0].Ruta == c, "no pidió la contraseña al entrar");
+        Pasada(v, c, t.AddSeconds(2), out pedir, out bloquear, enLaCarpeta);
+        Afirmar(pedir.Count == 0, "volvió a pedirla sin salir de la carpeta");
+
+        new Cofre(c).Desbloquear(Clave1, null, Nada);   // lo que hace la ventanita
+        Pasada(v, c, t.AddSeconds(3), out pedir, out bloquear, adentro);
+        Afirmar(bloquear.Count == 0, "la bloqueó con una ventana adentro");
+        Pasada(v, c, t.AddSeconds(10), out pedir, out bloquear);
+        Pasada(v, c, t.AddSeconds(14), out pedir, out bloquear);
+        Afirmar(bloquear.Count == 0, "la bloqueó antes de la espera");
+        Pasada(v, c, t.AddSeconds(16), out pedir, out bloquear);
+        Afirmar(bloquear.Count == 1 && bloquear[0] == c, "no la bloqueó al cerrarla");
+        new Cofre(c).Bloquear(null, Nada, false);
+        v.SePudo(c);
+        Afirmar(new Cofre(c).Estado == Estados.Bloqueada, "no quedó bloqueada");
+        Pasada(v, c, t.AddSeconds(17), out pedir, out bloquear, enLaCarpeta);
+        Afirmar(pedir.Count == 1, "no la pidió al volver a entrar");
+
+        pedir = new List<VentanaExplorador>();
+        new Vigia().Pasada(new[] { c }, new[] { enLaCarpeta }, new List<string> { c }, t, pedir, new List<string>());
+        Afirmar(pedir.Count == 0, "pidió la contraseña con la ventanita ya abierta");
+
+        new Cofre(c).Desbloquear(Clave1, null, Nada);
+        using (new FileStream(Path.Combine(c, "Fotos ñandú", "notas.txt"), FileMode.Open, FileAccess.Read, FileShare.Read))
+        {
+            Pasada(v, c, t.AddSeconds(20), out pedir, out bloquear);
+            Pasada(v, c, t.AddSeconds(26), out pedir, out bloquear);
+            Afirmar(bloquear.Count == 1, "no intentó bloquearla");
+            Espera<ErrorCandado>(() => new Cofre(c).Bloquear(null, Nada, false), "abierto en otro programa");
+            v.NoSePudo(c, t.AddSeconds(26));
+            Pasada(v, c, t.AddSeconds(30), out pedir, out bloquear);
+            Afirmar(bloquear.Count == 0, "reintentó antes de tiempo");
+        }
+        Pasada(v, c, t.AddSeconds(42), out pedir, out bloquear);
+        Afirmar(bloquear.Count == 1, "no reintentó");
+        new Cofre(c).Bloquear(null, Nada, false);
+        new Cofre(c).Desbloquear(Clave1, null, Nada);
+        Afirmar(Huella(c, true) == antes, "no volvió idéntica");
+    }
+
+    // La ventana y el vigilante sobre la misma carpeta: mientras uno trabaja, el otro no entra,
+    // y uno que la leyó antes no repite lo que ya hizo el otro.
+    static void ProbarReserva()
+    {
+        string c = NuevaCarpeta("reserva");
+        string antes = Huella(c);
+        Cofre.Crear(c, Clave1, null, false, true);
+        Cofre vieja = new Cofre(c);                 // la leyó desbloqueada
+        new Cofre(c).Bloquear(null, Nada, false);   // y otro la bloqueó
+        vieja.Bloquear(null, Nada, false);          // no hace nada: ya está bloqueada
+        Afirmar(new Cofre(c).Estado == Estados.Bloqueada, "no quedó bloqueada");
+        string ocupada = Path.Combine(c, Cofre.NombreDir, "ocupada");
+        using (new FileStream(ocupada, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None))
+            Espera<ErrorCandado>(() => new Cofre(c).Desbloquear(Clave1, null, Nada), "trabajando");
+        new Cofre(c).Desbloquear(Clave1, null, Nada);
+        Afirmar(!File.Exists(ocupada), "quedó el archivo de la reserva");
         Afirmar(Huella(c) == antes, "no volvió idéntica");
     }
 
@@ -613,6 +713,11 @@ static class Pruebas
         new Cofre(v).Bloquear(null, Nada, false);
         Cofre.Crear(w, Clave1, null, true);
         new Cofre(w).Bloquear(null, Nada, false);
+        // La del vigilante (probar-ventana.ps1 la abre en el Explorador): pide la contraseña cada vez.
+        string vigilada = NuevaCarpeta("Vigilada");
+        Cofre.Crear(vigilada, Clave1, null, true, true);
+        new Cofre(vigilada).Bloquear(null, Nada, false);
+        cfg.Carpetas.Add(vigilada);
         Datos.Guardar(cfg);
         Console.WriteLine("demo lista en " + dir);
         return 0;

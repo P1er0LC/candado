@@ -43,6 +43,7 @@ namespace Candado
         [DataMember(EmitDefaultValue = false)] public int? AtributosCarpeta;   // los de antes de ponerle el ícono
         [DataMember(EmitDefaultValue = false)] public string Modo;             // null o «cifrado», o «acceso»
         [DataMember(EmitDefaultValue = false)] public long? TamanoBloqueada;   // modo acceso: lo que pesaba al bloquearla
+        [DataMember(EmitDefaultValue = false)] public bool? CadaVez;           // pide la contraseña cada vez: se bloquea sola al cerrarla
     }
 
     [DataContract]
@@ -142,6 +143,35 @@ namespace Candado
         public string Estado { get { return Cabecera.Estado; } }
         public bool Interrumpida { get { return Estado == Estados.Bloqueando || Estado == Estados.Desbloqueando; } }
 
+        // Pedir la contraseña cada vez que se abre: el vigilante la vuelve a bloquear cuando
+        // ninguna ventana del Explorador la muestra.
+        public bool CadaVez { get { return Cabecera.CadaVez == true; } }
+
+        public void PonerCadaVez(bool cadaVez)
+        {
+            Reservado(() => { Cabecera.CadaVez = cadaVez ? true : (bool?)null; GuardarCabecera(); });
+        }
+
+        // Un solo proceso a la vez por carpeta, porque la ventana, la ventanita y el vigilante
+        // pueden coincidir: un archivo abierto sin compartir, que Windows suelta si el proceso
+        // muere. Al tomarlo se relee la cabecera, que otro pudo haber cambiado mientras tanto.
+        FileStream reserva;
+        int reservas;
+
+        void Reservado(Action trabajo)
+        {
+            if (reservas == 0)
+            {
+                try { reserva = new FileStream(Path.Combine(DirCandado, "ocupada"), FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None, 1, FileOptions.DeleteOnClose); }
+                catch (IOException) { throw new ErrorCandado("Candado ya está trabajando con esta carpeta: espera a que termine."); }
+                try { Cabecera = Json.Leer<Cabecera>(File.ReadAllBytes(RutaCabecera)); }
+                catch { reserva.Dispose(); reserva = null; throw; }
+            }
+            reservas++;
+            try { trabajo(); }
+            finally { if (--reservas == 0) { reserva.Dispose(); reserva = null; } }
+        }
+
         // ------------------------------------------------------------ crear y validar
 
         // Revisa que tenga sentido proteger esa carpeta. «otras» son las que ya protege la app.
@@ -191,7 +221,7 @@ namespace Candado
         }
 
         // Protege la carpeta (queda desbloqueada) y devuelve la clave de recuperación.
-        public static string Crear(string carpeta, string contrasena, IEnumerable<string> otras, bool soloAcceso = false)
+        public static string Crear(string carpeta, string contrasena, IEnumerable<string> otras, bool soloAcceso = false, bool cadaVez = false)
         {
             Validar(carpeta, otras);
             ValidarContrasena(contrasena);
@@ -212,7 +242,8 @@ namespace Candado
                 LlaveConRecuperacion = Convert.ToBase64String(Cripto.Cerrar(Cripto.Derivar(Cripto.NormalizarClave(clave), salR, Cripto.IteracionesRecuperacion), llave)),
                 LlaveConWindows = Cripto.CerrarConWindows(llave),
                 Creada = DateTime.Now.ToString("o"),
-                Modo = soloAcceso ? ModoAcceso : ModoCifrado
+                Modo = soloAcceso ? ModoAcceso : ModoCifrado,
+                CadaVez = cadaVez ? true : (bool?)null
             };
             DirectoryInfo d = Directory.CreateDirectory(Path.Combine(c, NombreDir));
             d.Attributes |= FileAttributes.Hidden | FileAttributes.System;
@@ -258,10 +289,14 @@ namespace Candado
         {
             ValidarContrasena(nueva);
             byte[] sal = Cripto.Azar(16);
-            Cabecera.Sal = Convert.ToBase64String(sal);
-            Cabecera.Iteraciones = Cripto.IteracionesContrasena;
-            Cabecera.LlaveConContrasena = Convert.ToBase64String(Cripto.Cerrar(Cripto.Derivar(nueva, sal, Cripto.IteracionesContrasena), llave));
-            GuardarCabecera();
+            string cerrada = Convert.ToBase64String(Cripto.Cerrar(Cripto.Derivar(nueva, sal, Cripto.IteracionesContrasena), llave));
+            Reservado(() =>
+            {
+                Cabecera.Sal = Convert.ToBase64String(sal);
+                Cabecera.Iteraciones = Cripto.IteracionesContrasena;
+                Cabecera.LlaveConContrasena = cerrada;
+                GuardarCabecera();
+            });
         }
 
         public void CambiarContrasena(string actual, string nueva)
@@ -273,10 +308,14 @@ namespace Candado
 
         public void Bloquear(Action<Progreso> avance, CancellationToken cancelar, bool sobrescribir)
         {
-            if (SoloAcceso) { if (Estado != Estados.Bloqueada) BloquearAcceso(avance); return; }   // no necesita la llave
-            byte[] llave = LlaveDeWindows();
-            if (llave == null) throw new ErrorCandado("Hace falta la contraseña para bloquearla.");
-            Bloquear(llave, avance, cancelar, sobrescribir);
+            Reservado(() =>
+            {
+                if (SoloAcceso) { if (Estado != Estados.Bloqueada) BloquearAcceso(avance); return; }   // no necesita la llave
+                if (Estado == Estados.Bloqueada) return;
+                byte[] llave = LlaveDeWindows();
+                if (llave == null) throw new ErrorCandado("Hace falta la contraseña para bloquearla.");
+                Bloquear(llave, avance, cancelar, sobrescribir);
+            });
         }
 
         public void Bloquear(string contrasena, Action<Progreso> avance, CancellationToken cancelar, bool sobrescribir)
@@ -305,14 +344,17 @@ namespace Candado
 
         public void ReanudarConLlave(byte[] llave, Action<Progreso> avance, CancellationToken cancelar, bool sobrescribir)
         {
-            if (SoloAcceso)
+            Reservado(() =>
             {
-                if (Estado == Estados.Bloqueando) BloquearAcceso(avance);
-                else if (Estado == Estados.Desbloqueando) DesbloquearAcceso(llave, avance);
-                return;
-            }
-            if (Estado == Estados.Bloqueando) Bloquear(llave, avance, cancelar, sobrescribir);
-            else if (Estado == Estados.Desbloqueando) Desbloquear(llave, avance, cancelar);
+                if (SoloAcceso)
+                {
+                    if (Estado == Estados.Bloqueando) BloquearAcceso(avance);
+                    else if (Estado == Estados.Desbloqueando) DesbloquearAcceso(llave, avance);
+                    return;
+                }
+                if (Estado == Estados.Bloqueando) Bloquear(llave, avance, cancelar, sobrescribir);
+                else if (Estado == Estados.Desbloqueando) Desbloquear(llave, avance, cancelar);
+            });
         }
 
         // Lo que ocupa: los cifrados si está bloqueada, los archivos si no.
@@ -335,9 +377,13 @@ namespace Candado
         // Deja la carpeta como una carpeta normal. Solo estando desbloqueada.
         public void QuitarProteccion()
         {
-            if (Estado != Estados.Desbloqueada) throw new ErrorCandado("Primero desbloquéala.");
-            if (SoloAcceso) QuitarNegaciones(Carpeta);
-            QuitarExtras();
+            Reservado(() =>
+            {
+                if (Estado != Estados.Desbloqueada) throw new ErrorCandado("Primero desbloquéala.");
+                if (SoloAcceso) QuitarNegaciones(Carpeta);
+                QuitarExtras();
+                Borrar(RutaCabecera);   // desde acá ya no es una carpeta protegida: nadie más la toca
+            });
             new DirectoryInfo(DirCandado).Attributes = FileAttributes.Directory;
             Directory.Delete(DirCandado, true);
         }
@@ -345,6 +391,11 @@ namespace Candado
         // ------------------------------------------------------------ bloquear
 
         public void Bloquear(byte[] llave, Action<Progreso> avance, CancellationToken cancelar, bool sobrescribir)
+        {
+            Reservado(() => BloquearCon(llave, avance, cancelar, sobrescribir));
+        }
+
+        void BloquearCon(byte[] llave, Action<Progreso> avance, CancellationToken cancelar, bool sobrescribir)
         {
             if (Estado == Estados.Bloqueada) return;
             if (Estado == Estados.Desbloqueando) throw new ErrorCandado("Hay un desbloqueo a medias: termínalo primero.");
@@ -718,6 +769,11 @@ namespace Candado
         // ------------------------------------------------------------ desbloquear
 
         public void Desbloquear(byte[] llave, Action<Progreso> avance, CancellationToken cancelar)
+        {
+            Reservado(() => DesbloquearCon(llave, avance, cancelar));
+        }
+
+        void DesbloquearCon(byte[] llave, Action<Progreso> avance, CancellationToken cancelar)
         {
             if (Estado == Estados.Desbloqueada) return;
             if (SoloAcceso) { DesbloquearAcceso(llave, avance); return; }
