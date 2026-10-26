@@ -58,13 +58,16 @@ namespace Candado
         long ultimoAvance;
         string nombreEnCurso;
         DispatcherTimer ocultarProgreso;
+        readonly string carpetaInicial;
+        bool recibioCarpeta;
 
         const string IconoCandado = "\uE72E", IconoAbierto = "\uE785", IconoAviso = "\uE7BA", IconoCarpeta = "\uE8B7";
 
         // ------------------------------------------------------------ armado
 
-        public Ventana(string captura, string pantalla)
+        public Ventana(string captura, string pantalla, string carpetaInicial)
         {
+            this.carpetaInicial = carpetaInicial;
             object claroReg = Registry.GetValue(@"HKEY_CURRENT_USER\Software\Microsoft\Windows\CurrentVersion\Themes\Personalize", "AppsUseLightTheme", 0);
             bool claro = claroReg is int && (int)claroReg == 1;
             if (claro)
@@ -109,6 +112,8 @@ namespace Candado
             cfg = Datos.Cargar();
             Refrescar();
 
+            if (captura == null && carpetaInicial != null)
+                Window.ContentRendered += delegate { AbrirCarpeta(carpetaInicial); };
             if (captura != null)
             {
                 Window.WindowStartupLocation = WindowStartupLocation.Manual;
@@ -222,6 +227,44 @@ namespace Candado
                 case "interrumpida": Terminar(f); break;
                 default: Datos.Quitar(cfg, f.Ruta); Refrescar(); break;
             }
+        }
+
+        // ------------------------------------------------------------ clic derecho del Explorador
+
+        // Hace lo que corresponde con la carpeta: protegerla, desbloquearla, bloquearla o
+        // terminar lo que quedó a medias. Si es una carpeta de adentro de una protegida, actúa
+        // sobre la protegida.
+        public void AbrirCarpeta(string ruta)
+        {
+            recibioCarpeta = true;
+            string c;
+            try { c = Cofre.Normalizar(ruta); }
+            catch (Exception) { Aviso("No entendí qué carpeta es", "Llegó «" + ruta + "». Ábrela desde «Proteger una carpeta»."); return; }
+            if (ocupado) { Aviso("Espera un momento", "Candado está terminando con «" + nombreEnCurso + "»."); return; }
+            if (!Cofre.EstaProtegida(c))
+            {
+                string madre = cfg.Carpetas.FirstOrDefault(p => (c.TrimEnd('\\') + "\\").StartsWith(Cofre.Normalizar(p) + "\\", StringComparison.OrdinalIgnoreCase) && Cofre.EstaProtegida(p));
+                if (madre != null) c = Cofre.Normalizar(madre);
+            }
+            if (Cofre.EstaProtegida(c))
+            {
+                if (FilaDe(c) == null) { Datos.Agregar(cfg, c); Refrescar(); }
+                Fila f = FilaDe(c);
+                if (f != null) Principal(f);
+                return;
+            }
+            try { Cofre.Validar(c, cfg.Carpetas); }
+            catch (ErrorCandado ex) { Aviso("No se puede proteger esa carpeta", ex.Message); return; }
+            DialogoProteger(c);
+        }
+
+        public void Traer()
+        {
+            if (Window.WindowState == WindowState.Minimized) Window.WindowState = WindowState.Normal;
+            Window.Activate();
+            Window.Topmost = true;
+            Window.Topmost = false;
+            Window.Focus();
         }
 
         // ------------------------------------------------------------ capa de diálogo
@@ -776,6 +819,11 @@ namespace Candado
                     return;
                 case "flujo-recuperar":
                     Recuperar(primera);
+                    return;
+                case "carpeta": AbrirCarpeta(carpetaInicial); return;
+                case "esperar":
+                    for (int i = 0; i < 200 && !recibioCarpeta; i++) await Task.Delay(100);
+                    await Task.Delay(300);
                     return;
                 case "proteger": DialogoProteger(@"D:\Clientes 2026"); break;
                 case "clave": MostrarClave(primera ?? new Fila { Nombre = "Clientes 2026" }, Cripto.NuevaClaveRecuperacion(), cfg.CorreoListo ? "ok" : null); break;

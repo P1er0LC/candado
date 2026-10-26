@@ -32,6 +32,7 @@ namespace Candado
         [DataMember] public string LlaveConRecuperacion;
         [DataMember] public string LlaveConWindows;       // solo mientras no está bloqueada
         [DataMember] public string Creada;
+        [DataMember(EmitDefaultValue = false)] public int? AtributosCarpeta;   // los de antes de ponerle el ícono
     }
 
     [DataContract]
@@ -69,7 +70,13 @@ namespace Candado
     {
         public const string NombreDir = ".candado";
         public const string NombreNota = "Carpeta protegida con Candado.txt";
+        public const string NombreIni = "desktop.ini";
+        const string MarcaIni = "; Candado: ícono de carpeta bloqueada";
         public const int LargoMinimo = 8;
+
+        // El ícono de carpeta con candado que se pone mientras está bloqueada. Lo carga la app
+        // desde sus recursos; sin él, la carpeta se bloquea igual pero con su ícono de siempre.
+        public static byte[] IconoCarpeta;
 
         // Para las pruebas de cortes: pausa por archivo y fallo a propósito tras N archivos.
         public static int PruebaPausaMs = 0;
@@ -91,9 +98,12 @@ namespace Candado
             Cabecera = Json.Leer<Cabecera>(File.ReadAllBytes(RutaCabecera));
         }
 
+        // Sin la barra final, salvo en la raíz de un disco: «D:» a secas es la carpeta actual de D:.
         public static string Normalizar(string carpeta)
         {
-            return Path.GetFullPath(carpeta).TrimEnd('\\');
+            string c = Path.GetFullPath(carpeta);
+            string raiz = Path.GetPathRoot(c);
+            return c.Length > raiz.Length ? c.TrimEnd('\\') : raiz;
         }
 
         public static bool EstaProtegida(string carpeta)
@@ -111,7 +121,7 @@ namespace Candado
         {
             string c = Normalizar(carpeta);
             if (!Directory.Exists(c)) throw new ErrorCandado("La carpeta no existe.");
-            if (string.Equals(Path.GetPathRoot(c).TrimEnd('\\'), c, StringComparison.OrdinalIgnoreCase))
+            if (string.Equals(Path.GetPathRoot(c), c, StringComparison.OrdinalIgnoreCase))
                 throw new ErrorCandado("No se puede proteger un disco entero: elige una carpeta.");
             if (EstaProtegida(c)) throw new ErrorCandado("Esta carpeta ya está protegida.");
 
@@ -148,7 +158,7 @@ namespace Candado
         // ¿a está dentro de b (o es b)?
         static bool Dentro(string a, string b)
         {
-            string x = Normalizar(a) + "\\", y = Normalizar(b) + "\\";
+            string x = Normalizar(a).TrimEnd('\\') + "\\", y = Normalizar(b).TrimEnd('\\') + "\\";
             return x.StartsWith(y, StringComparison.OrdinalIgnoreCase);
         }
 
@@ -288,6 +298,7 @@ namespace Candado
         public void QuitarProteccion()
         {
             if (Estado != Estados.Desbloqueada) throw new ErrorCandado("Primero desbloquéala.");
+            QuitarIcono();
             new DirectoryInfo(DirCandado).Attributes = FileAttributes.Directory;
             Directory.Delete(DirCandado, true);
         }
@@ -368,10 +379,69 @@ namespace Candado
                 catch (IOException) { }
             }
 
+            PonerIcono();
             Cabecera.LlaveConWindows = null;
             Cabecera.Estado = Estados.Bloqueada;
             GuardarCabecera();
-            File.WriteAllText(RutaNota, "Esta carpeta está bloqueada con Candado.\r\n\r\nPara ver tus archivos, abre Candado, elige esta carpeta y pon la contraseña.\r\nNo borres la carpeta oculta «.candado»: ahí están tus archivos cifrados.\r\n", Encoding.UTF8);
+            File.WriteAllText(RutaNota, "Esta carpeta está bloqueada con Candado.\r\n\r\nPara ver tus archivos, haz clic derecho sobre la carpeta → «Candado: bloquear o desbloquear»,\r\no abre Candado y pon la contraseña.\r\nNo borres la carpeta oculta «.candado»: ahí están tus archivos cifrados.\r\n", Encoding.UTF8);
+        }
+
+        // ------------------------------------------------------------ ícono de carpeta bloqueada
+
+        // El Explorador muestra el ícono de un desktop.ini si la carpeta tiene el atributo de
+        // solo lectura. Si la carpeta ya tenía su propio desktop.ini, ese se cifró con todo lo
+        // demás y vuelve al desbloquearla.
+        void PonerIcono()
+        {
+            if (IconoCarpeta == null) return;
+            try
+            {
+                string ini = Path.Combine(Carpeta, NombreIni), icono = Path.Combine(DirCandado, "carpeta.ico");
+                if (File.Exists(ini) && !EsNuestroIni(ini)) return;
+                Borrar(ini);
+                File.WriteAllBytes(icono, IconoCarpeta);
+                File.WriteAllText(ini, MarcaIni + "\r\n[.ShellClassInfo]\r\nIconResource=" + icono + ",0\r\nInfoTip=Bloqueada con Candado\r\n", Encoding.Unicode);
+                File.SetAttributes(ini, FileAttributes.Hidden | FileAttributes.System);
+                DirectoryInfo d = new DirectoryInfo(Carpeta);
+                if (Cabecera.AtributosCarpeta == null) { Cabecera.AtributosCarpeta = (int)d.Attributes; GuardarCabecera(); }
+                d.Attributes |= FileAttributes.ReadOnly;
+                AvisarExplorador(Carpeta);
+            }
+            catch (Exception) { }   // el ícono es un extra: si falla, la carpeta queda bloqueada igual
+        }
+
+        void QuitarIcono()
+        {
+            string ini = Path.Combine(Carpeta, NombreIni);
+            if (File.Exists(ini) && EsNuestroIni(ini)) Borrar(ini);
+            Borrar(Path.Combine(DirCandado, "carpeta.ico"));
+            if (Cabecera.AtributosCarpeta != null)
+            {
+                new DirectoryInfo(Carpeta).Attributes = (FileAttributes)Cabecera.AtributosCarpeta.Value;
+                Cabecera.AtributosCarpeta = null;
+            }
+            AvisarExplorador(Carpeta);
+        }
+
+        public static bool EsNuestroIni(string ruta)
+        {
+            try { return File.ReadAllText(ruta).StartsWith(MarcaIni); }
+            catch (Exception) { return false; }
+        }
+
+        [System.Runtime.InteropServices.DllImport("shell32.dll", CharSet = System.Runtime.InteropServices.CharSet.Unicode)]
+        static extern void SHChangeNotify(int evento, int banderas, string a, IntPtr b);
+
+        // Que el Explorador vuelva a leer el ícono sin esperar a que el usuario pulse F5.
+        static void AvisarExplorador(string carpeta)
+        {
+            try
+            {
+                SHChangeNotify(0x00002000, 0x0005, carpeta, IntPtr.Zero);   // SHCNE_UPDATEITEM, SHCNF_PATHW
+                string padre = Path.GetDirectoryName(carpeta);
+                if (padre != null) SHChangeNotify(0x00001000, 0x0005, padre, IntPtr.Zero);   // SHCNE_UPDATEDIR
+            }
+            catch (Exception) { }
         }
 
         void CifrarArchivos(byte[] llave, List<string> archivos, Indice indice, Action<Progreso> avance, CancellationToken cancelar)
@@ -443,6 +513,7 @@ namespace Candado
             {
                 // Bloqueo cortado antes de confirmar el índice: los originales siguen todos ahí.
                 VaciarDatos();
+                QuitarIcono();
                 Cabecera.Estado = Estados.Desbloqueada;
                 GuardarCabecera();
                 return;
@@ -454,6 +525,8 @@ namespace Candado
             Cabecera.Estado = Estados.Desbloqueando;
             GuardarCabecera();
             Borrar(RutaNota);
+            QuitarIcono();   // antes de restaurar: la carpeta puede traer su propio desktop.ini
+            GuardarCabecera();
             foreach (string c in indice.Carpetas) Directory.CreateDirectory(Path.Combine(Carpeta, c));
 
             Progreso p = new Progreso { Accion = "Desbloqueando", Total = indice.Archivos.Count };
@@ -542,6 +615,7 @@ namespace Candado
             foreach (string f in Directory.GetFiles(dir))
             {
                 if (dir == raiz && Path.GetFileName(f) == NombreNota) continue;
+                if (dir == raiz && string.Equals(Path.GetFileName(f), NombreIni, StringComparison.OrdinalIgnoreCase) && EsNuestroIni(f)) continue;
                 if ((File.GetAttributes(f) & FileAttributes.ReparsePoint) != 0)
                     throw new ErrorCandado("«" + Relativa(raiz, f) + "» es un enlace a otro archivo: Candado no puede protegerlo. Sácalo de la carpeta.");
                 archivos.Add(Relativa(raiz, f));

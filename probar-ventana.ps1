@@ -8,10 +8,10 @@ $demo = 'D:\candado-pruebas\demo'
 New-Item -ItemType Directory -Force $Salida | Out-Null
 & "$dist\pruebas.exe" --demo $datos $demo | Out-Null
 
-function Capturar([string]$Pantalla, [string]$Datos = $datos, [string]$Archivo = $Pantalla) {
+function Capturar([string]$Pantalla, [string]$Datos = $datos, [string]$Archivo = $Pantalla, [string]$Extra = '') {
     $png = Join-Path $Salida "$Archivo.png"
     Remove-Item $png -ErrorAction SilentlyContinue
-    $p = Start-Process "$dist\Candado.exe" -ArgumentList "--datos `"$Datos`" --captura `"$png`" --pantalla $Pantalla" -PassThru
+    $p = Start-Process "$dist\Candado.exe" -ArgumentList "--datos `"$Datos`" --captura `"$png`" --pantalla $Pantalla $Extra" -PassThru
     if (-not $p.WaitForExit(120000)) { $p.Kill(); "${Pantalla}: no terminó" ; return }
     '{0,-18} {1}' -f $Archivo, $(if (Test-Path $png) { 'ok' } else { 'SIN CAPTURA' })
 }
@@ -30,8 +30,24 @@ Capturar 'flujo-bloquear'
 Capturar 'flujo-terminar'
 'Fotos de sesiones terminada idéntica: ' + ((Huella "$demo\Fotos de sesiones") -eq $referencia)
 Capturar 'flujo-proteger'
-'Para proteger quedó sin archivos a la vista: ' + (@(Get-ChildItem "$demo\Para proteger" -Force | Where-Object { $_.Name -notin '.candado', 'Carpeta protegida con Candado.txt' }).Count -eq 0)
+'Para proteger quedó sin archivos a la vista: ' + (@(Get-ChildItem "$demo\Para proteger" -Force | Where-Object { $_.Name -notin '.candado', 'Carpeta protegida con Candado.txt', 'desktop.ini' }).Count -eq 0)
 Capturar 'lista' $datos 'lista-final'
+
+# Clic derecho: lo que llega con --carpeta.
+Capturar 'carpeta' $datos 'clic-bloqueada' "--carpeta `"$demo\Clientes 2026`""
+New-Item -ItemType Directory -Force "$demo\Sin proteger" | Out-Null
+Capturar 'carpeta' $datos 'clic-sin-proteger' "--carpeta `"$demo\Sin proteger`""
+Capturar 'carpeta' $datos 'clic-sistema' "--carpeta `"$env:SystemRoot`""
+# Con Candado ya abierta: la segunda copia le pasa la carpeta a la primera y se cierra.
+$png = Join-Path $Salida 'clic-con-app-abierta.png'
+Remove-Item $png -ErrorAction SilentlyContinue
+$a = Start-Process "$dist\Candado.exe" -ArgumentList "--datos `"$datos`" --instancia prueba-tuberia --captura `"$png`" --pantalla esperar" -PassThru
+Start-Sleep -Seconds 4
+$b = Start-Process "$dist\Candado.exe" -ArgumentList "--datos `"$datos`" --instancia prueba-tuberia --carpeta `"$demo\Clientes 2026`"" -PassThru
+$bSalio = $b.WaitForExit(10000)
+$a.WaitForExit(60000) | Out-Null
+'{0,-18} {1} (la segunda copia se cerró sola: {2})' -f 'clic-app-abierta', $(if (Test-Path $png) { 'ok' } else { 'SIN CAPTURA' }), $bSalio
+if (-not $bSalio) { $b.Kill() }
 $vacio = Join-Path $Salida 'vacio'
 New-Item -ItemType Directory -Force $vacio | Out-Null
 Remove-Item "$vacio\config.json" -ErrorAction SilentlyContinue

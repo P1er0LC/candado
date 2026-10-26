@@ -2,9 +2,10 @@
 
 Contraseña para carpetas de Windows, sin moverlas de donde están.
 
-Bloqueada, una carpeta solo tiene adentro una nota y la carpeta oculta `.candado` con sus
-archivos cifrados. Desbloqueada, vuelve a estar como siempre, con sus nombres, fechas y
-atributos. Si olvidas la contraseña, la recuperas con una clave que te llega por correo.
+Bloqueada, una carpeta se ve en el Explorador con un candado en el ícono, y adentro solo
+tiene una nota y la carpeta oculta `.candado` con sus archivos cifrados. Desbloqueada,
+vuelve a estar como siempre, con sus nombres, fechas y atributos. Si olvidas la
+contraseña, la recuperas con una clave que te llega por correo.
 
 ![Lista de carpetas protegidas](docs/lista.png)
 
@@ -20,6 +21,22 @@ atributos. Si olvidas la contraseña, la recuperas con una clave que te llega po
   completa lo que faltaba, sin perder nada.
 - **Cambiar la contraseña** y **quitar la protección** cuando quieras.
 
+## Desde el Explorador
+
+<img src="docs/carpeta-bloqueada.png" alt="Ícono de una carpeta bloqueada" width="64" align="right">
+
+- **Clic derecho → «Candado: bloquear o desbloquear».** Hace lo que corresponde: si la
+  carpeta no está protegida, abre «Proteger»; si está bloqueada, pide la contraseña; si
+  está desbloqueada, la bloquea; si quedó a medias, la termina. También funciona con clic
+  derecho en el fondo de una carpeta abierta, y sobre una subcarpeta de una protegida.
+  Si Candado ya está abierta, le pasa la carpeta a esa misma ventana.
+- **Ícono:** mientras está bloqueada, la carpeta se ve con el candado, y al pasar el mouse
+  dice «Bloqueada con Candado». Si la carpeta ya tenía su propio ícono, vuelve al
+  desbloquearla. A veces el Explorador tarda unos segundos en refrescarlo, o hay que pulsar
+  F5.
+
+En Windows 11 la opción aparece dentro de «Mostrar más opciones».
+
 ## Instalar
 
 Necesita Windows 10 u 11. No instala nada más: compila con el `csc` que ya trae .NET
@@ -32,8 +49,13 @@ cd candado
 ```
 
 Queda en `%LOCALAPPDATA%\Programs\Candado`, con accesos en el menú Inicio y en el
-escritorio. Para actualizarla, cierra Candado, haz `git pull` y vuelve a correr
-`instalar.ps1`.
+escritorio, y con la opción en el clic derecho de las carpetas. Todo es solo para tu
+usuario: no pide permisos de administrador. Para actualizarla, cierra Candado, haz
+`git pull` y vuelve a correr `instalar.ps1`.
+
+`desinstalar.ps1` quita el programa, los accesos y la opción del clic derecho. No toca tus
+carpetas ni tus ajustes: una carpeta que quedó bloqueada sigue bloqueada, y para abrirla
+hay que volver a instalar Candado.
 
 ## Antes de proteger algo importante: el correo
 

@@ -9,12 +9,13 @@ $csc = Join-Path $env:SystemRoot 'Microsoft.NET\Framework64\v4.0.30319\csc.exe'
 $wpf = Join-Path $env:SystemRoot 'Microsoft.NET\Framework64\v4.0.30319\WPF'
 $comunes = @('/nologo', '/codepage:65001', '/optimize+', '/unsafe', '/reference:System.Security.dll', '/reference:System.Runtime.Serialization.dll', '/reference:System.Core.dll')
 $nucleo = "$raiz\src\Cripto.cs", "$raiz\src\Cofre.cs", "$raiz\src\Ajustes.cs"
+if (-not (Test-Path "$raiz\icono.ico") -or -not (Test-Path "$raiz\carpeta-bloqueada.ico")) { & "$raiz\icono.ps1" | Out-Null }
+$comunes += "/resource:$raiz\carpeta-bloqueada.ico,CarpetaBloqueada.ico"
 
-& $csc @comunes /target:exe "/out:$dist\pruebas.exe" @nucleo "$raiz\pruebas\Pruebas.cs"
+& $csc @comunes /target:exe "/out:$dist\pruebas.exe" /reference:System.Drawing.dll @nucleo "$raiz\pruebas\Pruebas.cs"
 if ($LASTEXITCODE) { throw "csc (pruebas) terminó con código $LASTEXITCODE" }
 if ($SoloPruebas) { return }
 
-if (-not (Test-Path "$raiz\icono.ico")) { & "$raiz\icono.ps1" | Out-Null }
 & $csc @comunes /target:winexe "/out:$dist\Candado.exe" "/win32icon:$raiz\icono.ico" `
     "/reference:$wpf\PresentationFramework.dll" "/reference:$wpf\PresentationCore.dll" "/reference:$wpf\WindowsBase.dll" `
     /reference:System.Xaml.dll /reference:System.Windows.Forms.dll /reference:System.Drawing.dll `

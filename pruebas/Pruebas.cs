@@ -23,6 +23,10 @@ static class Pruebas
 
     static int Main(string[] args)
     {
+        using (Stream s = System.Reflection.Assembly.GetExecutingAssembly().GetManifestResourceStream("CarpetaBloqueada.ico"))
+        using (MemoryStream m = new MemoryStream()) { s.CopyTo(m); Cofre.IconoCarpeta = m.ToArray(); }
+        if (args.Length >= 3 && args[0] == "--icono") return GuardarIcono(args[1], args[2]);
+        if (args.Length >= 1 && args[0] == "--eco") { foreach (string a in args) Console.WriteLine("[" + a + "]"); return 0; }
         if (args.Length >= 1 && args[0] == "--hijo") return Hijo(args);
         if (args.Length >= 1 && args[0] == "--medir") return Medir(args.Length > 1 ? args[1] : Path.GetTempPath());
         if (args.Length >= 3 && args[0] == "--demo") return Demo(args[1], args[2]);
@@ -36,6 +40,7 @@ static class Pruebas
         Probar("PBKDF2 y HMAC de Windows dan lo mismo que los de .NET", ProbarCng);
         Probar("Clave de recuperación: formato y normalización", ProbarClave);
         Probar("Bloquear y desbloquear: todo vuelve idéntico", ProbarIdaVuelta);
+        Probar("Carpeta con su propio ícono (desktop.ini)", ProbarDesktopIniPropio);
         Probar("Contraseña equivocada no cambia nada", ProbarContrasenaMala);
         Probar("Bloquear de nuevo sin contraseña (cuenta de Windows)", ProbarSinContrasena);
         Probar("Recuperar con la clave y contraseña nueva", ProbarRecuperacion);
@@ -121,7 +126,8 @@ static class Pruebas
 
     static List<string> FueraDelCofre(string carpeta)
     {
-        return Directory.GetFileSystemEntries(carpeta).Select(Path.GetFileName).Where(n => n != Cofre.NombreDir && n != Cofre.NombreNota).ToList();
+        return Directory.GetFileSystemEntries(carpeta).Where(r => !(Path.GetFileName(r) == Cofre.NombreIni && Cofre.EsNuestroIni(r)))
+            .Select(Path.GetFileName).Where(n => n != Cofre.NombreDir && n != Cofre.NombreNota).ToList();
     }
 
     static void ComprobarBloqueada(string carpeta)
@@ -132,6 +138,10 @@ static class Pruebas
         List<string> fuera = FueraDelCofre(carpeta);
         Afirmar(fuera.Count == 0, "quedaron afuera: " + string.Join(", ", fuera));
         Afirmar(File.Exists(Path.Combine(carpeta, Cofre.NombreNota)), "falta la nota");
+        string ini = Path.Combine(carpeta, Cofre.NombreIni);
+        Afirmar(File.Exists(ini) && Cofre.EsNuestroIni(ini), "falta el desktop.ini del ícono");
+        Afirmar((new DirectoryInfo(carpeta).Attributes & FileAttributes.ReadOnly) != 0, "la carpeta no quedó de solo lectura (sin eso no se ve el ícono)");
+        Afirmar(File.Exists(Path.Combine(carpeta, Cofre.NombreDir, "carpeta.ico")), "falta el ícono");
         foreach (string f in Directory.GetFiles(Path.Combine(carpeta, Cofre.NombreDir), "*", SearchOption.AllDirectories))
         {
             string texto = Encoding.UTF8.GetString(File.ReadAllBytes(f));
@@ -171,6 +181,7 @@ static class Pruebas
     {
         string c = NuevaCarpeta("ida y vuelta");
         string antes = Huella(c);
+        FileAttributes atributos = new DirectoryInfo(c).Attributes;
         string clave = Cofre.Crear(c, Clave1, null);
         Afirmar(clave.Length == 39, "clave");
         new Cofre(c).Bloquear(null, Nada, false);
@@ -180,6 +191,51 @@ static class Pruebas
         Afirmar(Huella(c) == antes, "los archivos no volvieron idénticos");
         Afirmar(!File.Exists(Path.Combine(c, Cofre.NombreNota)), "quedó la nota");
         Afirmar(!Directory.Exists(Path.Combine(c, Cofre.NombreDir, "datos")), "quedó la carpeta de datos");
+        Afirmar(!File.Exists(Path.Combine(c, Cofre.NombreIni)), "quedó el desktop.ini");
+        Afirmar(new DirectoryInfo(c).Attributes == atributos, "los atributos de la carpeta no volvieron: " + new DirectoryInfo(c).Attributes);
+        Afirmar(new Cofre(c).Cabecera.AtributosCarpeta == null, "quedaron anotados los atributos");
+    }
+
+    // Una carpeta con su propio ícono: el suyo se cifra con lo demás y vuelve al desbloquear.
+    static void ProbarDesktopIniPropio()
+    {
+        string c = NuevaCarpeta("con su desktop.ini");
+        string ini = Path.Combine(c, Cofre.NombreIni);
+        File.WriteAllText(ini, "[.ShellClassInfo]\r\nIconResource=C:\\Windows\\System32\\shell32.dll,4\r\n", Encoding.Unicode);
+        File.SetAttributes(ini, FileAttributes.Hidden | FileAttributes.System);
+        new DirectoryInfo(c).Attributes |= FileAttributes.ReadOnly;
+        FileAttributes atributos = new DirectoryInfo(c).Attributes;
+        string antes = Huella(c);
+        Cofre.Crear(c, Clave1, null);
+        new Cofre(c).Bloquear(null, Nada, false);
+        ComprobarBloqueada(c);
+        Afirmar(!File.ReadAllText(ini).Contains("shell32"), "quedó el desktop.ini viejo a la vista");
+        new Cofre(c).Desbloquear(Clave1, null, Nada);
+        Afirmar(Huella(c) == antes, "no volvió idéntica (su desktop.ini incluido)");
+        Afirmar(File.ReadAllText(ini).Contains("shell32"), "no volvió su desktop.ini");
+        Afirmar(new DirectoryInfo(c).Attributes == atributos, "los atributos de la carpeta no volvieron");
+    }
+
+    // Guarda el ícono que Windows muestra para la carpeta, para mirarlo.
+    [System.Runtime.InteropServices.DllImport("shell32.dll", CharSet = System.Runtime.InteropServices.CharSet.Unicode)]
+    static extern IntPtr SHGetFileInfo(string ruta, uint atributos, ref InfoArchivo info, uint tamano, uint banderas);
+
+    [System.Runtime.InteropServices.StructLayout(System.Runtime.InteropServices.LayoutKind.Sequential, CharSet = System.Runtime.InteropServices.CharSet.Unicode)]
+    struct InfoArchivo
+    {
+        public IntPtr Icono; public int Indice; public uint Atributos;
+        [System.Runtime.InteropServices.MarshalAs(System.Runtime.InteropServices.UnmanagedType.ByValTStr, SizeConst = 260)] public string Nombre;
+        [System.Runtime.InteropServices.MarshalAs(System.Runtime.InteropServices.UnmanagedType.ByValTStr, SizeConst = 80)] public string Tipo;
+    }
+
+    static int GuardarIcono(string carpeta, string png)
+    {
+        InfoArchivo info = new InfoArchivo();
+        SHGetFileInfo(carpeta, 0, ref info, (uint)System.Runtime.InteropServices.Marshal.SizeOf(info), 0x100);   // SHGFI_ICON, grande
+        if (info.Icono == IntPtr.Zero) { Console.WriteLine("sin ícono"); return 1; }
+        using (System.Drawing.Icon i = System.Drawing.Icon.FromHandle(info.Icono)) i.ToBitmap().Save(png);
+        Console.WriteLine("ícono de {0} en {1}", carpeta, png);
+        return 0;
     }
 
     static void ProbarContrasenaMala()
@@ -361,6 +417,8 @@ static class Pruebas
     static void ProbarValidar()
     {
         Espera<ErrorCandado>(() => Cofre.Validar("C:\\", null), "disco entero");
+        Espera<ErrorCandado>(() => Cofre.Validar("D:\\", null), "disco entero");
+        Afirmar(Cofre.Normalizar("D:\\") == "D:\\" && Cofre.Normalizar("D:\\x\\") == "D:\\x", "Normalizar con raíces");
         Espera<ErrorCandado>(() => Cofre.Validar(Environment.GetFolderPath(Environment.SpecialFolder.Windows), null), "sistema");
         Espera<ErrorCandado>(() => Cofre.Validar(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Temp"), null), "sistema");
         Espera<ErrorCandado>(() => Cofre.Validar(Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments), null), "de adentro");
