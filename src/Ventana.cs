@@ -48,8 +48,8 @@ namespace Candado
     public class Ventana
     {
         public readonly Window Window;
-        readonly Dictionary<string, string> tema;
-        readonly Dictionary<string, string[]> chips;
+        readonly Dictionary<string, string> tema = Tema.Colores;
+        readonly Dictionary<string, string[]> chips = Tema.Chips;
         readonly ObservableCollection<Fila> filas = new ObservableCollection<Fila>();
         Config cfg;
         CancellationTokenSource cancelacion;
@@ -69,34 +69,7 @@ namespace Candado
         public Ventana(string captura, string pantalla, string carpetaInicial)
         {
             this.carpetaInicial = carpetaInicial;
-            object claroReg = Registry.GetValue(@"HKEY_CURRENT_USER\Software\Microsoft\Windows\CurrentVersion\Themes\Personalize", "AppsUseLightTheme", 0);
-            bool claro = claroReg is int && (int)claroReg == 1;
-            if (claro)
-            {
-                tema = new Dictionary<string, string> {
-                    { "Fondo", "#F3F4F6" }, { "Panel", "#FFFFFF" }, { "Superficie", "#FFFFFF" }, { "Superficie2", "#E7EAEE" }, { "Borde", "#DADDE3" },
-                    { "Texto", "#1F2328" }, { "Tenue", "#5F6773" }, { "Acento", "#5A48D8" }, { "TextoAcento", "#FFFFFF" }, { "Pista", "#E1E4E8" },
-                    { "Aviso", "#9A6700" }, { "Peligro", "#CF222E" }, { "Ok", "#1A7F37" }, { "Velo", "#80000000" }, { "FondoAviso", "#FBEFCF" }, { "TextoAviso", "#7D5600" } };
-                chips = new Dictionary<string, string[]> {
-                    { "acento", new[] { "#E6E2FB", "#4636B8" } }, { "aviso", new[] { "#FBEFCF", "#7D5600" } },
-                    { "peligro", new[] { "#FBE0E0", "#B3261E" } }, { "neutro", new[] { "#E7EAEE", "#4B5563" } } };
-            }
-            else
-            {
-                tema = new Dictionary<string, string> {
-                    { "Fondo", "#1B1D21" }, { "Panel", "#202328" }, { "Superficie", "#2A2E34" }, { "Superficie2", "#353A42" }, { "Borde", "#3A3F47" },
-                    { "Texto", "#E8EAED" }, { "Tenue", "#9AA1AC" }, { "Acento", "#7B6AF0" }, { "TextoAcento", "#FFFFFF" }, { "Pista", "#3A3F47" },
-                    { "Aviso", "#D9A93A" }, { "Peligro", "#E5534B" }, { "Ok", "#3FB950" }, { "Velo", "#B3000000" }, { "FondoAviso", "#3D3320" }, { "TextoAviso", "#E8C26B" } };
-                chips = new Dictionary<string, string[]> {
-                    { "acento", new[] { "#2C2750", "#B9AEFF" } }, { "aviso", new[] { "#3D3320", "#E8C26B" } },
-                    { "peligro", new[] { "#45282A", "#F5A3A0" } }, { "neutro", new[] { "#353A42", "#B9C0CA" } } };
-            }
-
-            string xaml;
-            using (Stream s = Assembly.GetExecutingAssembly().GetManifestResourceStream("Ventana.xaml"))
-            using (StreamReader r = new StreamReader(s, Encoding.UTF8)) xaml = r.ReadToEnd();
-            foreach (string k in tema.Keys.OrderByDescending(x => x.Length)) xaml = xaml.Replace("@" + k, tema[k]);
-            Window = (Window)XamlReader.Parse(xaml);
+            Window = Tema.Cargar("Ventana.xaml");
 
             E<ItemsControl>("Lista").ItemsSource = filas;
             E<ItemsControl>("Lista").AddHandler(ButtonBase.ClickEvent, new RoutedEventHandler(ClicEnFila));
@@ -249,13 +222,10 @@ namespace Candado
             try { c = Cofre.Normalizar(ruta); }
             catch (Exception) { Aviso("No entendí qué carpeta es", "Llegó «" + ruta + "». Ábrela desde «Proteger una carpeta»."); return; }
             if (ocupado) { Aviso("Espera un momento", "Candado está terminando con «" + nombreEnCurso + "»."); return; }
-            if (!Cofre.EstaProtegida(c))
+            string protegida = Cofre.ProtegidaDe(c, cfg.Carpetas);
+            if (protegida != null)
             {
-                string madre = cfg.Carpetas.FirstOrDefault(p => (c.TrimEnd('\\') + "\\").StartsWith(Cofre.Normalizar(p) + "\\", StringComparison.OrdinalIgnoreCase) && Cofre.EstaProtegida(p));
-                if (madre != null) c = Cofre.Normalizar(madre);
-            }
-            if (Cofre.EstaProtegida(c))
-            {
+                c = protegida;
                 if (FilaDe(c) == null) { Datos.Agregar(cfg, c); Refrescar(); }
                 Fila f = FilaDe(c);
                 if (f != null) Principal(f);

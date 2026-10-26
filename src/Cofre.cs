@@ -10,13 +10,15 @@
 // Nada se borra hasta que su versión cifrada está escrita y el índice confirmado, y cada
 // paso deja el estado en la cabecera: si se corta la luz, Reanudar termina lo empezado.
 //
-// En el modo «solo acceso» no se cifra nada: bloquear le agrega a la carpeta un permiso de
-// Windows que le niega a todos listar, abrir, escribir y borrar lo que tiene adentro. La
-// llave y la clave de recuperación siguen igual, como prueba de la contraseña.
+// En el modo «solo acceso» no se cifra nada: bloquear mueve lo de la carpeta a
+// .candado\contenido y ahí pone un permiso de Windows que le niega a todos listar, abrir,
+// escribir y borrar. La llave y la clave de recuperación siguen igual, como prueba de la
+// contraseña.
 using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Reflection;
 using System.Runtime.Serialization;
 using System.Runtime.Serialization.Json;
 using System.Security.AccessControl;
@@ -78,7 +80,11 @@ namespace Candado
     {
         public const string NombreDir = ".candado";
         public const string NombreNota = "Carpeta protegida con Candado.txt";
+        public const string NombreAcceso = "Desbloquear con Candado.lnk";
         public const string NombreIni = "desktop.ini";
+
+        // La app que pone el acceso «Desbloquear con Candado» (sin ella, no se pone).
+        public static string RutaApp;
         const string MarcaIni = "; Candado: ícono de carpeta bloqueada";
         public const int LargoMinimo = 8;
 
@@ -98,6 +104,7 @@ namespace Candado
         string RutaCabecera { get { return Path.Combine(DirCandado, "cabecera.json"); } }
         string RutaIndice { get { return Path.Combine(DirCandado, "indice.bin"); } }
         string RutaNota { get { return Path.Combine(Carpeta, NombreNota); } }
+        string DirContenido { get { return Path.Combine(DirCandado, "contenido"); } }
 
         public Cofre(string carpeta)
         {
@@ -117,6 +124,16 @@ namespace Candado
         public static bool EstaProtegida(string carpeta)
         {
             return File.Exists(Path.Combine(Normalizar(carpeta), NombreDir, "cabecera.json"));
+        }
+
+        // La carpeta protegida que corresponde a «carpeta»: ella misma, o la de la lista que la
+        // contiene. Null si ninguna.
+        public static string ProtegidaDe(string carpeta, IEnumerable<string> lista)
+        {
+            string c = Normalizar(carpeta);
+            if (EstaProtegida(c)) return c;
+            string madre = lista.FirstOrDefault(p => (c.TrimEnd('\\') + "\\").StartsWith(Normalizar(p).TrimEnd('\\') + "\\", StringComparison.OrdinalIgnoreCase) && EstaProtegida(p));
+            return madre == null ? null : Normalizar(madre);
         }
 
         public const string ModoCifrado = "cifrado", ModoAcceso = "acceso";
@@ -320,7 +337,7 @@ namespace Candado
         {
             if (Estado != Estados.Desbloqueada) throw new ErrorCandado("Primero desbloquéala.");
             if (SoloAcceso) QuitarNegaciones(Carpeta);
-            QuitarIcono();
+            QuitarExtras();
             new DirectoryInfo(DirCandado).Attributes = FileAttributes.Directory;
             Directory.Delete(DirCandado, true);
         }
@@ -402,11 +419,50 @@ namespace Candado
                 catch (IOException) { }
             }
 
-            PonerIcono();
+            PonerExtras();
             Cabecera.LlaveConWindows = null;
             Cabecera.Estado = Estados.Bloqueada;
             GuardarCabecera();
-            File.WriteAllText(RutaNota, "Esta carpeta está bloqueada con Candado.\r\n\r\nPara ver tus archivos, haz clic derecho sobre la carpeta → «Candado: bloquear o desbloquear»,\r\no abre Candado y pon la contraseña.\r\nNo borres la carpeta oculta «.candado»: ahí están tus archivos cifrados.\r\n", Encoding.UTF8);
+            AvisarExplorador(Carpeta);
+        }
+
+        // ------------------------------------------------------------ lo que se ve de una carpeta bloqueada
+
+        // Al abrir una carpeta bloqueada se ve una nota y el acceso «Desbloquear con Candado»,
+        // que abre la ventanita de la contraseña; por fuera, el ícono con el candado.
+        void PonerExtras()
+        {
+            PonerIcono();
+            PonerAcceso();
+            File.WriteAllText(RutaNota, "Esta carpeta está bloqueada con Candado.\r\n\r\n" +
+                "Para ver tus archivos, abre «Desbloquear con Candado» (aquí mismo) y pon la contraseña.\r\n" +
+                "No borres la carpeta oculta «.candado»: ahí están tus archivos.\r\n", Encoding.UTF8);
+        }
+
+        void QuitarExtras()
+        {
+            Borrar(RutaNota);
+            Borrar(Path.Combine(Carpeta, NombreAcceso));
+            QuitarIcono();
+        }
+
+        // El acceso apunta a la app que bloqueó la carpeta (Programa la anota en RutaApp).
+        void PonerAcceso()
+        {
+            if (RutaApp == null) return;
+            try
+            {
+                Type tipo = Type.GetTypeFromProgID("WScript.Shell");
+                object shell = Activator.CreateInstance(tipo);
+                object lnk = tipo.InvokeMember("CreateShortcut", BindingFlags.InvokeMethod, null, shell, new object[] { Path.Combine(Carpeta, NombreAcceso) });
+                Type t = lnk.GetType();
+                t.InvokeMember("TargetPath", BindingFlags.SetProperty, null, lnk, new object[] { RutaApp });
+                t.InvokeMember("Arguments", BindingFlags.SetProperty, null, lnk, new object[] { "--carpeta \"" + Carpeta + "\"" });
+                t.InvokeMember("IconLocation", BindingFlags.SetProperty, null, lnk, new object[] { RutaApp + ",0" });
+                t.InvokeMember("Description", BindingFlags.SetProperty, null, lnk, new object[] { "Desbloquear esta carpeta con Candado" });
+                t.InvokeMember("Save", BindingFlags.InvokeMethod, null, lnk, null);
+            }
+            catch (Exception) { }   // como el ícono: sin él, queda el clic derecho
         }
 
         // ------------------------------------------------------------ ícono de carpeta bloqueada
@@ -425,9 +481,6 @@ namespace Candado
                 File.WriteAllBytes(icono, IconoCarpeta);
                 File.WriteAllText(ini, MarcaIni + "\r\n[.ShellClassInfo]\r\nIconResource=" + icono + ",0\r\nInfoTip=Bloqueada con Candado\r\n", Encoding.Unicode);
                 File.SetAttributes(ini, FileAttributes.Hidden | FileAttributes.System);
-                // En el modo acceso el permiso que bloquea se hereda: el desktop.ini va con los
-                // suyos propios para que el Explorador pueda leerlo y mostrar el ícono.
-                if (SoloAcceso) { FileSecurity s = File.GetAccessControl(ini); s.SetAccessRuleProtection(true, true); File.SetAccessControl(ini, s); }
                 DirectoryInfo d = new DirectoryInfo(Carpeta);
                 if (Cabecera.AtributosCarpeta == null) { Cabecera.AtributosCarpeta = (int)d.Attributes; GuardarCabecera(); }
                 d.Attributes |= FileAttributes.ReadOnly;
@@ -482,6 +535,9 @@ namespace Candado
             }
         }
 
+        // Lo de la carpeta se mueve a .candado\contenido (en el mismo disco es solo cambiarle el
+        // nombre: instantáneo y sin tocar los archivos) y ahí se niega el acceso. La carpeta en
+        // sí queda abierta, para que al entrar se vea el acceso «Desbloquear con Candado».
         void BloquearAcceso(Action<Progreso> avance)
         {
             Progreso p = new Progreso { Accion = "Bloqueando", Total = 1, Actual = "" };
@@ -496,16 +552,32 @@ namespace Candado
                 Cabecera.TamanoBloqueada = total;
             }
             GuardarCabecera();
-            // .candado con sus propios permisos, para que Candado pueda leer su cabecera con la carpeta bloqueada.
-            DirectorySecurity d = Directory.GetAccessControl(DirCandado);
-            d.SetAccessRuleProtection(true, true);
-            Directory.SetAccessControl(DirCandado, d);
-            PonerIcono();
-            DirectorySecurity s = Directory.GetAccessControl(Carpeta);
+            if (Directory.Exists(DirContenido)) QuitarNegaciones(DirContenido);   // un bloqueo cortado a medias
+            else Directory.CreateDirectory(DirContenido);
+            List<string> movidas = new List<string>();
+            foreach (string e in EntradasDeLaCarpeta())
+            {
+                string destino = Path.Combine(DirContenido, Path.GetFileName(e));
+                if (Existe(destino)) destino = NombreLibre(destino);
+                try { Mover(e, destino); }
+                catch (Exception ex)
+                {
+                    if (!(ex is IOException) && !(ex is UnauthorizedAccessException)) throw;
+                    foreach (string m in movidas) Mover(m, Path.Combine(Carpeta, Path.GetFileName(m)));
+                    if (!Directory.EnumerateFileSystemEntries(DirContenido).Any()) Directory.Delete(DirContenido);
+                    Cabecera.TamanoBloqueada = null;
+                    Cabecera.Estado = Estados.Desbloqueada;
+                    GuardarCabecera();
+                    throw new ErrorCandado("No se pudo bloquear: «" + Path.GetFileName(e) + "» está abierto en otro programa. Ciérralo y vuelve a intentarlo.");
+                }
+                movidas.Add(destino);
+            }
+            DirectorySecurity s = Directory.GetAccessControl(DirContenido);
             s.AddAccessRule(new FileSystemAccessRule(Todos, Negados, InheritanceFlags.ContainerInherit | InheritanceFlags.ObjectInherit, PropagationFlags.None, AccessControlType.Deny));
             // Windows la propaga a todo lo de adentro. No toca contenidos ni fechas, pero NTFS le
             // pone el atributo «Archivo» a lo que no lo tenía (marca de cambio para respaldos).
-            Directory.SetAccessControl(Carpeta, s);
+            Directory.SetAccessControl(DirContenido, s);
+            PonerExtras();
             Cabecera.LlaveConWindows = null;
             Cabecera.Estado = Estados.Bloqueada;
             GuardarCabecera();
@@ -521,13 +593,43 @@ namespace Candado
             Cabecera.LlaveConWindows = Cripto.CerrarConWindows(llave);
             Cabecera.Estado = Estados.Desbloqueando;
             GuardarCabecera();
-            QuitarNegaciones(Carpeta);
-            QuitarIcono();
+            QuitarNegaciones(Carpeta);   // las bloqueadas con la primera versión negaban la carpeta entera
+            QuitarExtras();              // antes de devolver todo: puede traer su propio desktop.ini
+            if (Directory.Exists(DirContenido))
+            {
+                QuitarNegaciones(DirContenido);
+                foreach (string e in Directory.GetFileSystemEntries(DirContenido))
+                {
+                    string destino = Path.Combine(Carpeta, Path.GetFileName(e));
+                    if (Existe(destino)) destino = NombreLibre(destino);
+                    Mover(e, destino);
+                }
+                Directory.Delete(DirContenido);
+            }
             Cabecera.TamanoBloqueada = null;
             Cabecera.Estado = Estados.Desbloqueada;
             GuardarCabecera();
             p.Hechos = 1;
             if (avance != null) avance(p);
+            AvisarExplorador(Carpeta);
+        }
+
+        // Lo de la raíz de la carpeta que no es de Candado.
+        List<string> EntradasDeLaCarpeta()
+        {
+            return Directory.GetFileSystemEntries(Carpeta).Where(e =>
+            {
+                string n = Path.GetFileName(e);
+                return n != NombreDir && n != NombreNota && n != NombreAcceso && !(string.Equals(n, NombreIni, StringComparison.OrdinalIgnoreCase) && EsNuestroIni(e));
+            }).ToList();
+        }
+
+        static bool Existe(string ruta) { return File.Exists(ruta) || Directory.Exists(ruta); }
+
+        static void Mover(string origen, string destino)
+        {
+            if (Directory.Exists(origen)) Directory.Move(origen, destino);
+            else File.Move(origen, destino);
         }
 
         // Saca las reglas que niegan a «Todos» puestas directamente en la carpeta; las copias
@@ -546,6 +648,7 @@ namespace Candado
             try
             {
                 SHChangeNotify(0x00002000, 0x0005, carpeta, IntPtr.Zero);   // SHCNE_UPDATEITEM, SHCNF_PATHW
+                SHChangeNotify(0x00001000, 0x0005, carpeta, IntPtr.Zero);   // SHCNE_UPDATEDIR: si está abierta, que se vea lo nuevo
                 string padre = Path.GetDirectoryName(carpeta);
                 if (padre != null) SHChangeNotify(0x00001000, 0x0005, padre, IntPtr.Zero);   // SHCNE_UPDATEDIR
             }
@@ -622,7 +725,7 @@ namespace Candado
             {
                 // Bloqueo cortado antes de confirmar el índice: los originales siguen todos ahí.
                 VaciarDatos();
-                QuitarIcono();
+                QuitarExtras();
                 Cabecera.Estado = Estados.Desbloqueada;
                 GuardarCabecera();
                 return;
@@ -633,8 +736,7 @@ namespace Candado
             Cabecera.LlaveConWindows = Cripto.CerrarConWindows(llave);
             Cabecera.Estado = Estados.Desbloqueando;
             GuardarCabecera();
-            Borrar(RutaNota);
-            QuitarIcono();   // antes de restaurar: la carpeta puede traer su propio desktop.ini
+            QuitarExtras();   // antes de restaurar: la carpeta puede traer su propio desktop.ini
             GuardarCabecera();
             foreach (string c in indice.Carpetas) Directory.CreateDirectory(Path.Combine(Carpeta, c));
 
@@ -683,6 +785,7 @@ namespace Candado
             if (Directory.Exists(DirDatos) && !Directory.EnumerateFileSystemEntries(DirDatos).Any()) Directory.Delete(DirDatos);
             Cabecera.Estado = Estados.Desbloqueada;
             GuardarCabecera();
+            AvisarExplorador(Carpeta);
         }
 
         static string NombreLibre(string ruta)
@@ -691,7 +794,7 @@ namespace Candado
             for (int i = 1; ; i++)
             {
                 string r = Path.Combine(dir, nombre + " (desbloqueado" + (i > 1 ? " " + i : "") + ")" + ext);
-                if (!File.Exists(r)) return r;
+                if (!Existe(r)) return r;
             }
         }
 
@@ -723,7 +826,7 @@ namespace Candado
             }
             foreach (string f in Directory.GetFiles(dir))
             {
-                if (dir == raiz && Path.GetFileName(f) == NombreNota) continue;
+                if (dir == raiz && (Path.GetFileName(f) == NombreNota || Path.GetFileName(f) == NombreAcceso)) continue;
                 if (dir == raiz && string.Equals(Path.GetFileName(f), NombreIni, StringComparison.OrdinalIgnoreCase) && EsNuestroIni(f)) continue;
                 if ((File.GetAttributes(f) & FileAttributes.ReparsePoint) != 0)
                     throw new ErrorCandado("«" + Relativa(raiz, f) + "» es un enlace a otro archivo: Candado no puede protegerlo. Sácalo de la carpeta.");

@@ -25,6 +25,7 @@ static class Pruebas
     {
         using (Stream s = System.Reflection.Assembly.GetExecutingAssembly().GetManifestResourceStream("CarpetaBloqueada.ico"))
         using (MemoryStream m = new MemoryStream()) { s.CopyTo(m); Cofre.IconoCarpeta = m.ToArray(); }
+        Cofre.RutaApp = Process.GetCurrentProcess().MainModule.FileName;   // para que ponga el acceso «Desbloquear con Candado»
         if (args.Length >= 3 && args[0] == "--icono") return GuardarIcono(args[1], args[2]);
         if (args.Length >= 1 && args[0] == "--eco") { foreach (string a in args) Console.WriteLine("[" + a + "]"); return 0; }
         if (args.Length >= 1 && args[0] == "--hijo") return Hijo(args);
@@ -42,6 +43,7 @@ static class Pruebas
         Probar("Bloquear y desbloquear: todo vuelve idéntico", ProbarIdaVuelta);
         Probar("Carpeta con su propio ícono (desktop.ini)", ProbarDesktopIniPropio);
         Probar("Solo bloquear el acceso: nadie entra y los archivos no se tocan", ProbarAcceso);
+        Probar("Solo acceso con un archivo abierto: se deshace", ProbarAccesoAbierto);
         Probar("Contraseña equivocada no cambia nada", ProbarContrasenaMala);
         Probar("Bloquear de nuevo sin contraseña (cuenta de Windows)", ProbarSinContrasena);
         Probar("Recuperar con la clave y contraseña nueva", ProbarRecuperacion);
@@ -139,7 +141,7 @@ static class Pruebas
     static List<string> FueraDelCofre(string carpeta)
     {
         return Directory.GetFileSystemEntries(carpeta).Where(r => !(Path.GetFileName(r) == Cofre.NombreIni && Cofre.EsNuestroIni(r)))
-            .Select(Path.GetFileName).Where(n => n != Cofre.NombreDir && n != Cofre.NombreNota).ToList();
+            .Select(Path.GetFileName).Where(n => n != Cofre.NombreDir && n != Cofre.NombreNota && n != Cofre.NombreAcceso).ToList();
     }
 
     static void ComprobarBloqueada(string carpeta)
@@ -154,6 +156,8 @@ static class Pruebas
         Afirmar(File.Exists(ini) && Cofre.EsNuestroIni(ini), "falta el desktop.ini del ícono");
         Afirmar((new DirectoryInfo(carpeta).Attributes & FileAttributes.ReadOnly) != 0, "la carpeta no quedó de solo lectura (sin eso no se ve el ícono)");
         Afirmar(File.Exists(Path.Combine(carpeta, Cofre.NombreDir, "carpeta.ico")), "falta el ícono");
+        Afirmar(File.Exists(Path.Combine(carpeta, Cofre.NombreAcceso)), "falta el acceso «Desbloquear con Candado»");
+        if (c.SoloAcceso) return;   // ahí no hay nada cifrado, y el contenido no se puede listar
         foreach (string f in Directory.GetFiles(Path.Combine(carpeta, Cofre.NombreDir), "*", SearchOption.AllDirectories))
         {
             string texto = Encoding.UTF8.GetString(File.ReadAllBytes(f));
@@ -218,15 +222,18 @@ static class Pruebas
         Stopwatch r = Stopwatch.StartNew();
         new Cofre(c).Bloquear(null, Nada, false);   // no pide la contraseña
         double segundos = r.Elapsed.TotalSeconds;
-        Cofre k = new Cofre(c);   // la cabecera se sigue leyendo con la carpeta bloqueada
+        Cofre k = new Cofre(c);
         Afirmar(k.Estado == Estados.Bloqueada, "estado " + k.Estado);
         Afirmar(!Directory.Exists(Path.Combine(c, Cofre.NombreDir, "datos")), "cifró algo");
-        Espera<UnauthorizedAccessException>(() => Directory.GetFiles(c), null);
-        Espera<UnauthorizedAccessException>(() => File.ReadAllBytes(Path.Combine(c, "archivo 5.bin")), null);
-        Espera<UnauthorizedAccessException>(() => File.ReadAllText(Path.Combine(c, "Fotos ñandú", "notas.txt")), null);
-        Espera<UnauthorizedAccessException>(() => File.Delete(Path.Combine(c, "archivo 5.bin")), null);
-        Espera<UnauthorizedAccessException>(() => File.WriteAllText(Path.Combine(c, "nuevo.txt"), "x"), null);
-        Afirmar(Cofre.EsNuestroIni(Path.Combine(c, Cofre.NombreIni)), "el Explorador no podría leer el desktop.ini del ícono");
+        // La carpeta se abre y solo muestra lo de Candado; el contenido movido está negado.
+        ComprobarBloqueada(c);
+        string contenido = Path.Combine(c, Cofre.NombreDir, "contenido");
+        Afirmar(!File.Exists(Path.Combine(c, "archivo 5.bin")), "quedó a la vista");
+        Espera<UnauthorizedAccessException>(() => Directory.GetFiles(contenido), null);
+        Espera<UnauthorizedAccessException>(() => File.ReadAllBytes(Path.Combine(contenido, "archivo 5.bin")), null);
+        Espera<UnauthorizedAccessException>(() => File.ReadAllText(Path.Combine(contenido, "Fotos ñandú", "notas.txt")), null);
+        Espera<UnauthorizedAccessException>(() => File.Delete(Path.Combine(contenido, "archivo 5.bin")), null);
+        Espera<UnauthorizedAccessException>(() => File.WriteAllText(Path.Combine(contenido, "nuevo.txt"), "x"), null);
         Afirmar(k.Tamano() > 5000000, "no recordó el tamaño: " + k.Tamano());
         Espera<ErrorCandado>(() => new Cofre(c).Desbloquear("otra-contraseña", null, Nada), "no es correcta");
         new Cofre(c).Desbloquear(Clave1, null, Nada);
@@ -240,6 +247,18 @@ static class Pruebas
         new Cofre(c).QuitarProteccion();
         Afirmar(!Cofre.EstaProtegida(c), "sigue protegida");
         Console.WriteLine("      bloquear en modo acceso: {0:N2} s", segundos);
+    }
+
+    static void ProbarAccesoAbierto()
+    {
+        string c = NuevaCarpeta("solo acceso abierto");
+        string antes = Huella(c);
+        Cofre.Crear(c, Clave1, null, true);
+        using (new FileStream(Path.Combine(c, "Fotos ñandú", "notas.txt"), FileMode.Open, FileAccess.Read, FileShare.Read))
+            Espera<ErrorCandado>(() => new Cofre(c).Bloquear(null, Nada, false), "abierto en otro programa");
+        Afirmar(new Cofre(c).Estado == Estados.Desbloqueada, "estado " + new Cofre(c).Estado);
+        Afirmar(Huella(c) == antes, "no volvió todo a su lugar: " + Diferencia(antes, Huella(c)));
+        Afirmar(!Directory.Exists(Path.Combine(c, Cofre.NombreDir, "contenido")), "quedó la carpeta de contenido");
     }
 
     // Una carpeta con su propio ícono: el suyo se cifra con lo demás y vuelve al desbloquear.
@@ -571,6 +590,8 @@ static class Pruebas
         if (Directory.Exists(dir)) BorrarTodo(dir);
         Directory.CreateDirectory(dir);
         Datos.Dir = datos;
+        string app = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "Candado.exe");
+        if (File.Exists(app)) Cofre.RutaApp = app;   // que el acceso de la demo abra la ventanita
         Config cfg = new Config { Usuario = "piero@ejemplo.com", ContrasenaCerrada = Cripto.CerrarConWindows(Encoding.UTF8.GetBytes("x")) };
         string a = NuevaCarpeta("Clientes 2026"), b = NuevaCarpeta("Diseños de tatuajes"), c = NuevaCarpeta("Fotos de sesiones");
         foreach (string x in new[] { a, b, c }) { Cofre.Crear(x, Clave1, null); cfg.Carpetas.Add(x); }
@@ -586,6 +607,12 @@ static class Pruebas
         cfg.Carpetas.Add(Path.Combine(dir, "Contratos viejos"));
         NuevaCarpeta("Para proteger");            // la usa la captura «flujo-proteger»
         NuevaCarpeta("Para proteger (acceso)");   // y esta «flujo-proteger-acceso»
+        // Las de la ventanita (capturas «mini…»): bloqueadas y fuera de la lista.
+        string v = NuevaCarpeta("Ventanita"), w = NuevaCarpeta("Ventanita (acceso)");
+        Cofre.Crear(v, Clave1, null);
+        new Cofre(v).Bloquear(null, Nada, false);
+        Cofre.Crear(w, Clave1, null, true);
+        new Cofre(w).Bloquear(null, Nada, false);
         Datos.Guardar(cfg);
         Console.WriteLine("demo lista en " + dir);
         return 0;

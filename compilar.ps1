@@ -19,6 +19,7 @@ if ($SoloPruebas) { return }
 & $csc @comunes /target:winexe "/out:$dist\Candado.exe" "/win32icon:$raiz\icono.ico" `
     "/reference:$wpf\PresentationFramework.dll" "/reference:$wpf\PresentationCore.dll" "/reference:$wpf\WindowsBase.dll" `
     /reference:System.Xaml.dll /reference:System.Windows.Forms.dll /reference:System.Drawing.dll `
-    "/resource:$raiz\src\Ventana.xaml,Ventana.xaml" @nucleo "$raiz\src\Ventana.cs" "$raiz\src\Programa.cs"
+    "/resource:$raiz\src\Estilos.xaml,Estilos.xaml" "/resource:$raiz\src\Ventana.xaml,Ventana.xaml" "/resource:$raiz\src\Mini.xaml,Mini.xaml" `
+    @nucleo "$raiz\src\Tema.cs" "$raiz\src\Ventana.cs" "$raiz\src\Mini.cs" "$raiz\src\Programa.cs"
 if ($LASTEXITCODE) { throw "csc (Candado) terminó con código $LASTEXITCODE" }
 Get-Item "$dist\Candado.exe" | ForEach-Object { 'Compilado: {0} ({1:N0} KB)' -f $_.FullName, ($_.Length / 1KB) }

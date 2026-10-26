@@ -1,14 +1,18 @@
-// Punto de entrada. --carpeta <ruta> es lo que manda el clic derecho del Explorador: si
-// Candado ya está abierta, se la pasa a esa ventana por una tubería con nombre y termina.
+// Punto de entrada. --carpeta <ruta> es lo que mandan el clic derecho del Explorador y el
+// acceso «Desbloquear con Candado»: si Candado ya está abierta, se la pasa a esa ventana por
+// una tubería con nombre y termina; si no, una carpeta protegida abre la ventanita (Mini) y
+// una sin proteger, la ventana completa para protegerla.
 // Solo para probarla: --datos <carpeta> (en vez de %APPDATA%\Candado), --instancia <nombre>
 // (otra ventana única, para probar el paso de carpetas) y --captura <png> --pantalla <nombre>
-// (dibuja la ventana fuera de la pantalla, guarda la imagen y cierra).
+// (dibuja la ventana fuera de la pantalla, guarda la imagen y cierra; las pantallas «mini…»
+// son de la ventanita y necesitan --carpeta).
 using System;
 using System.IO;
 using System.IO.Pipes;
 using System.Net;
 using System.Reflection;
 using System.Runtime.InteropServices;
+using System.Security.Cryptography;
 using System.Text;
 using System.Threading;
 using System.Windows;
@@ -43,6 +47,24 @@ namespace Candado
             ServicePointManager.SecurityProtocol |= SecurityProtocolType.Tls12;
             using (Stream s = Assembly.GetExecutingAssembly().GetManifestResourceStream("CarpetaBloqueada.ico"))
             using (MemoryStream m = new MemoryStream()) { s.CopyTo(m); Cofre.IconoCarpeta = m.ToArray(); }
+            Cofre.RutaApp = Assembly.GetExecutingAssembly().Location;
+
+            string protegida = null;
+            if (carpeta != null && (captura == null || pantalla.StartsWith("mini")))
+            {
+                try { protegida = Cofre.ProtegidaDe(carpeta, Datos.Cargar().Carpetas); } catch (Exception) { }
+            }
+            if (protegida != null && (captura != null || !Abierta(instancia)))
+            {
+                // Una sola ventanita por carpeta, aunque le den doble clic dos veces.
+                bool primeraMini;
+                using (Mutex unica = new Mutex(true, @"Local\" + instancia + "-mini-" + Huella(protegida), out primeraMini))
+                {
+                    if (!primeraMini) return 0;
+                    if (captura == null) Datos.Agregar(Datos.Cargar(), protegida);
+                    return Nueva().Run(new Mini(protegida, captura, pantalla).Window);
+                }
+            }
 
             bool primera;
             using (Mutex unica = new Mutex(true, @"Local\" + instancia, out primera))
@@ -53,16 +75,36 @@ namespace Candado
                     MessageBox.Show("Candado ya está abierto.", "Candado", MessageBoxButton.OK, MessageBoxImage.Information);
                     return 0;
                 }
-                Application app = new Application();
-                app.DispatcherUnhandledException += (s, e) =>
-                {
-                    MessageBox.Show("Algo falló: " + e.Exception.Message, "Candado", MessageBoxButton.OK, MessageBoxImage.Error);
-                    e.Handled = true;
-                };
+                Application app = Nueva();
                 Ventana v = new Ventana(captura, pantalla, carpeta);
                 Escuchar(tuberia, v);
                 return app.Run(v.Window);
             }
+        }
+
+        static Application Nueva()
+        {
+            Application app = new Application();
+            app.DispatcherUnhandledException += (s, e) =>
+            {
+                MessageBox.Show("Algo falló: " + e.Exception.Message, "Candado", MessageBoxButton.OK, MessageBoxImage.Error);
+                e.Handled = true;
+            };
+            return app;
+        }
+
+        static bool Abierta(string instancia)
+        {
+            Mutex m;
+            if (!Mutex.TryOpenExisting(@"Local\" + instancia, out m)) return false;
+            m.Dispose();
+            return true;
+        }
+
+        static string Huella(string carpeta)
+        {
+            using (SHA1 sha = SHA1.Create())
+                return BitConverter.ToString(sha.ComputeHash(Encoding.UTF8.GetBytes(carpeta.ToLowerInvariant()))).Replace("-", "").Substring(0, 16);
         }
 
         // La otra copia de Candado le pasa la carpeta a esta, que ya está abierta.

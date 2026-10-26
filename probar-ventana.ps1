@@ -30,13 +30,32 @@ Capturar 'flujo-bloquear'
 Capturar 'flujo-terminar'
 'Fotos de sesiones terminada idéntica: ' + ((Huella "$demo\Fotos de sesiones") -eq $referencia)
 Capturar 'flujo-proteger'
-'Para proteger quedó sin archivos a la vista: ' + (@(Get-ChildItem "$demo\Para proteger" -Force | Where-Object { $_.Name -notin '.candado', 'Carpeta protegida con Candado.txt', 'desktop.ini' }).Count -eq 0)
+$extras = '.candado', 'Carpeta protegida con Candado.txt', 'Desbloquear con Candado.lnk', 'desktop.ini'
+'Para proteger quedó sin archivos a la vista: ' + (@(Get-ChildItem "$demo\Para proteger" -Force | Where-Object { $_.Name -notin $extras }).Count -eq 0)
 Capturar 'flujo-proteger-acceso'
 $acc = "$demo\Para proteger (acceso)"
-$negado = try { Get-ChildItem -LiteralPath $acc -ErrorAction Stop | Out-Null; $false } catch { $true }
-'Para proteger (acceso): no se puede listar: {0} · el contenido sigue intacto tras desbloquear: (ver pruebas del núcleo)' -f $negado
+$negado = try { Get-ChildItem -LiteralPath "$acc\.candado\contenido" -ErrorAction Stop | Out-Null; $false } catch { $true }
+'Para proteger (acceso): sin archivos a la vista: {0} · el contenido no se puede listar: {1}' -f (@(Get-ChildItem -LiteralPath $acc -Force | Where-Object { $_.Name -notin $extras }).Count -eq 0), $negado
 Capturar 'proteger'
 Capturar 'lista' $datos 'lista-final'
+
+# La ventanita: lo que abre el acceso «Desbloquear con Candado» de una carpeta bloqueada.
+function Acceso([string]$Dir) {
+    $lnk = Join-Path $Dir 'Desbloquear con Candado.lnk'
+    if (-not (Test-Path -LiteralPath $lnk)) { return 'no hay' }
+    $s = (New-Object -ComObject WScript.Shell).CreateShortcut($lnk)
+    '{0} {1}' -f (Split-Path $s.TargetPath -Leaf), $s.Arguments
+}
+$v = "$demo\Ventanita"
+'Ventanita bloqueada, acceso: ' + (Acceso $v)
+foreach ($p in 'mini', 'mini-error', 'mini-recuperar') { Capturar $p $datos $p "--carpeta `"$v`"" }
+Capturar 'mini-listo' $datos 'mini-listo' "--carpeta `"$v`""
+'Ventanita desbloqueada idéntica: {0} · acceso: {1}' -f ((Huella $v) -eq $referencia), (Acceso $v)
+Capturar 'mini' $datos 'mini-bloquear' "--carpeta `"$v`""
+'Ventanita bloqueada de nuevo, acceso: ' + (Acceso $v)
+$w = "$demo\Ventanita (acceso)"
+Capturar 'mini-listo' $datos 'mini-listo-acceso' "--carpeta `"$w`""
+'Ventanita (acceso) desbloqueada idéntica: {0} · acceso: {1}' -f ((Huella $w) -eq $referencia), (Acceso $w)
 
 # Clic derecho: lo que llega con --carpeta.
 Capturar 'carpeta' $datos 'clic-bloqueada' "--carpeta `"$demo\Clientes 2026`""

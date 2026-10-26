@@ -3,8 +3,9 @@
 Contraseña para carpetas de Windows, sin moverlas de donde están.
 
 Bloqueada, una carpeta se ve en el Explorador con un candado en el ícono, y nadie puede ver
-lo que tiene adentro. Desbloqueada, vuelve a estar como siempre, con sus nombres, fechas y
-atributos. Si olvidas la contraseña, la recuperas con una clave que te llega por correo.
+lo que tiene adentro: al abrirla solo aparece «Desbloquear con Candado», que pide la
+contraseña. Desbloqueada, vuelve a estar como siempre, con sus nombres, fechas y atributos.
+Si olvidas la contraseña, la recuperas con una clave que te llega por correo.
 
 ![Lista de carpetas protegidas](docs/lista.png)
 
@@ -14,7 +15,7 @@ Se elige al protegerla:
 
 | | **Cifrar los archivos** (recomendado) | **Solo bloquear el acceso** |
 |---|---|---|
-| Qué hace al bloquear | Cifra cada archivo dentro de la carpeta oculta `.candado` y borra los originales | Pone un permiso de Windows que le niega a todos abrir, listar, escribir o borrar lo de adentro |
+| Qué hace al bloquear | Cifra cada archivo dentro de la carpeta oculta `.candado` y borra los originales | Mueve lo de adentro a la carpeta oculta `.candado` y le pone un permiso de Windows que le niega a todos abrir, listar, escribir o borrar |
 | Los archivos | Quedan cifrados: sin la contraseña son ruido | No se tocan: siguen ahí, tal cual |
 | Si alguien se lleva el disco o tiene permisos de administrador | No puede ver nada | Puede entrar quitando el permiso (Propiedades → Seguridad) |
 | Bloquear y desbloquear | Tarda según cuánto pese (1 minuto cada 2–3 GB en un disco mecánico) | Al instante, pese lo que pese |
@@ -40,17 +41,27 @@ curiosidad. Para algo que de verdad tiene que quedar privado, usa el cifrado.
 
 <img src="docs/carpeta-bloqueada.png" alt="Ícono de una carpeta bloqueada" width="64" align="right">
 
+- **Doble clic.** Una carpeta bloqueada se abre, pero adentro solo están
+  «Desbloquear con Candado» y una nota. Con doble clic en «Desbloquear con Candado» sale
+  una ventanita que pide la contraseña: si no es, lo dice en rojo y deja intentarlo de
+  nuevo; si es, desbloquea y avisa en verde, con un botón para abrir la carpeta. Desde ahí
+  también está «Olvidé mi contraseña».
 - **Clic derecho → «Candado: bloquear o desbloquear».** Hace lo que corresponde: si la
-  carpeta no está protegida, abre «Proteger»; si está bloqueada, pide la contraseña; si
-  está desbloqueada, la bloquea; si quedó a medias, la termina. También funciona con clic
-  derecho en el fondo de una carpeta abierta, y sobre una subcarpeta de una protegida.
-  Si Candado ya está abierta, le pasa la carpeta a esa misma ventana.
+  carpeta no está protegida, abre «Proteger»; si está bloqueada, abre la misma ventanita;
+  si está desbloqueada, la bloquea; si quedó a medias, la termina. También funciona con
+  clic derecho en el fondo de una carpeta abierta, y sobre una subcarpeta de una
+  protegida. Si Candado ya está abierta, le pasa la carpeta a esa misma ventana.
 - **Ícono:** mientras está bloqueada, la carpeta se ve con el candado, y al pasar el mouse
   dice «Bloqueada con Candado». Si la carpeta ya tenía su propio ícono, vuelve al
   desbloquearla. A veces el Explorador tarda unos segundos en refrescarlo, o hay que pulsar
   F5.
 
 En Windows 11 la opción aparece dentro de «Mostrar más opciones».
+
+<p>
+  <img src="docs/ventanita-error.png" alt="Ventanita con la contraseña equivocada" width="49%">
+  <img src="docs/ventanita-listo.png" alt="Ventanita después de desbloquear" width="49%">
+</p>
 
 ## Instalar
 
@@ -127,22 +138,27 @@ puede abrirla: conviene tener activada la verificación en dos pasos en la cuent
   que tienen enlaces o uniones adentro.
 - **Correo:** se conecta con STARTTLS (puerto 587); el 465 no lo admite.
 - **Modo acceso:** tu cuenta de Windows tiene que ser la dueña de la carpeta (si no lo es,
-  Candado intenta serlo, y si no puede, te pide usar el cifrado). Mientras está bloqueada,
-  tampoco la ven la búsqueda de Windows, los respaldos ni el antivirus. Al bloquearla, NTFS
-  le marca el atributo «Archivo» a los archivos que no lo tenían; el contenido y las fechas
-  no cambian.
+  Candado intenta serlo, y si no puede, te pide usar el cifrado). Mover lo de adentro a
+  `.candado` es instantáneo porque no sale del disco; si algún archivo está abierto en
+  otro programa, no se bloquea y todo queda donde estaba. Mientras está bloqueada,
+  tampoco la ven la búsqueda de Windows, los respaldos ni el antivirus. Al bloquearla,
+  NTFS le marca el atributo «Archivo» a los archivos que no lo tenían; el contenido y las
+  fechas no cambian.
 
 ### Abrir a mano una carpeta en modo acceso
 
 Si algún día te quedas sin Candado y una carpeta quedó bloqueada en modo acceso, se abre
-sacándole el permiso. En PowerShell:
+sacándole el permiso a `.candado\contenido` y moviendo lo de adentro de vuelta. En
+PowerShell:
 
 ```powershell
-icacls "D:\la carpeta" /remove:d *S-1-1-0
+icacls "D:\la carpeta\.candado\contenido" /remove:d *S-1-1-0
+Move-Item "D:\la carpeta\.candado\contenido\*" "D:\la carpeta" -Force
 ```
 
-(`S-1-1-0` es «Todos»). Con el cifrado esto no sirve: sin Candado y la contraseña o la
-clave, los archivos no se pueden leer.
+(`S-1-1-0` es «Todos»). Las bloqueadas con la primera versión tenían el permiso en la
+carpeta misma: `icacls "D:\la carpeta" /remove:d *S-1-1-0`. Con el cifrado esto no sirve:
+sin Candado y la contraseña o la clave, los archivos no se pueden leer.
 
 ## Desarrollo
 
@@ -151,12 +167,14 @@ src/Cripto.cs     cifrado: AES de .NET, PBKDF2 y HMAC de Windows (CNG)
 src/Cofre.cs      una carpeta protegida: crear, bloquear, desbloquear, recuperar, reanudar
 src/Ajustes.cs    configuración, lista de carpetas y envío del correo
 src/Ventana.cs    la ventana (WPF); el diseño está en src/Ventana.xaml
+src/Mini.cs       la ventanita de «Desbloquear con Candado»; el diseño está en src/Mini.xaml
+src/Tema.cs       colores claros u oscuros y los estilos compartidos (src/Estilos.xaml)
 pruebas/          pruebas del núcleo
 ```
 
 ```powershell
 .\compilar.ps1                             # dist\Candado.exe y dist\pruebas.exe
-.\dist\pruebas.exe D:\candado-pruebas      # 19 pruebas: los dos modos, cortes, alteraciones, correo falso
+.\dist\pruebas.exe D:\candado-pruebas      # 20 pruebas: los dos modos, cortes, alteraciones, correo falso
 .\probar-ventana.ps1                       # capturas de cada pantalla y flujos reales con datos de demo
 ```
 
