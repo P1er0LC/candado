@@ -1,0 +1,189 @@
+<Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Candado" Width="920" Height="640" MinWidth="760" MinHeight="520"
+        WindowStartupLocation="CenterScreen" Background="@Fondo" Foreground="@Texto"
+        FontFamily="Segoe UI" FontSize="13" UseLayoutRounding="True" TextOptions.TextFormattingMode="Display">
+  <Window.Resources>
+    <Style x:Key="Boton" TargetType="Button">
+      <Setter Property="Foreground" Value="@TextoAcento"/>
+      <Setter Property="Background" Value="@Acento"/>
+      <Setter Property="Padding" Value="16,8"/>
+      <Setter Property="FontWeight" Value="SemiBold"/>
+      <Setter Property="Cursor" Value="Hand"/>
+      <Setter Property="HorizontalContentAlignment" Value="Center"/>
+      <Setter Property="Template">
+        <Setter.Value>
+          <ControlTemplate TargetType="Button">
+            <Border x:Name="b" Background="{TemplateBinding Background}" CornerRadius="6" Padding="{TemplateBinding Padding}">
+              <ContentPresenter HorizontalAlignment="{TemplateBinding HorizontalContentAlignment}" VerticalAlignment="Center"/>
+            </Border>
+            <ControlTemplate.Triggers>
+              <Trigger Property="IsMouseOver" Value="True"><Setter TargetName="b" Property="Opacity" Value="0.88"/></Trigger>
+              <Trigger Property="IsPressed" Value="True"><Setter TargetName="b" Property="Opacity" Value="0.75"/></Trigger>
+              <Trigger Property="IsEnabled" Value="False"><Setter TargetName="b" Property="Opacity" Value="0.4"/></Trigger>
+            </ControlTemplate.Triggers>
+          </ControlTemplate>
+        </Setter.Value>
+      </Setter>
+    </Style>
+    <Style x:Key="BotonSecundario" TargetType="Button" BasedOn="{StaticResource Boton}">
+      <Setter Property="Background" Value="@Superficie2"/>
+      <Setter Property="Foreground" Value="@Texto"/>
+      <Setter Property="FontWeight" Value="Normal"/>
+    </Style>
+    <Style x:Key="BotonPeligro" TargetType="Button" BasedOn="{StaticResource Boton}">
+      <Setter Property="Background" Value="@Peligro"/>
+      <Setter Property="Foreground" Value="#FFFFFF"/>
+    </Style>
+    <Style x:Key="BotonIcono" TargetType="Button" BasedOn="{StaticResource BotonSecundario}">
+      <Setter Property="FontFamily" Value="Segoe MDL2 Assets"/>
+      <Setter Property="FontSize" Value="14"/>
+      <Setter Property="Padding" Value="11,9"/>
+    </Style>
+    <Style x:Key="BotonEnlace" TargetType="Button">
+      <Setter Property="Foreground" Value="@Acento"/>
+      <Setter Property="Cursor" Value="Hand"/>
+      <Setter Property="Template">
+        <Setter.Value>
+          <ControlTemplate TargetType="Button">
+            <TextBlock x:Name="t" Text="{Binding Content, RelativeSource={RelativeSource TemplatedParent}}" Foreground="{TemplateBinding Foreground}" VerticalAlignment="Center"/>
+            <ControlTemplate.Triggers>
+              <Trigger Property="IsMouseOver" Value="True"><Setter TargetName="t" Property="TextDecorations" Value="Underline"/></Trigger>
+              <Trigger Property="IsEnabled" Value="False"><Setter TargetName="t" Property="Opacity" Value="0.4"/></Trigger>
+            </ControlTemplate.Triggers>
+          </ControlTemplate>
+        </Setter.Value>
+      </Setter>
+    </Style>
+    <Style x:Key="Titulo" TargetType="TextBlock">
+      <Setter Property="FontSize" Value="22"/>
+      <Setter Property="FontWeight" Value="SemiBold"/>
+    </Style>
+    <Style x:Key="Tenue" TargetType="TextBlock">
+      <Setter Property="Foreground" Value="@Tenue"/>
+      <Setter Property="TextWrapping" Value="Wrap"/>
+    </Style>
+    <Style x:Key="Etiqueta" TargetType="TextBlock">
+      <Setter Property="FontWeight" Value="SemiBold"/>
+      <Setter Property="Margin" Value="0,12,0,5"/>
+    </Style>
+    <Style TargetType="TextBox">
+      <Setter Property="Background" Value="@Superficie"/>
+      <Setter Property="Foreground" Value="@Texto"/>
+      <Setter Property="BorderBrush" Value="@Borde"/>
+      <Setter Property="CaretBrush" Value="@Texto"/>
+      <Setter Property="Padding" Value="8,6"/>
+    </Style>
+    <Style TargetType="PasswordBox">
+      <Setter Property="Background" Value="@Superficie"/>
+      <Setter Property="Foreground" Value="@Texto"/>
+      <Setter Property="BorderBrush" Value="@Borde"/>
+      <Setter Property="CaretBrush" Value="@Texto"/>
+      <Setter Property="Padding" Value="8,6"/>
+    </Style>
+    <Style TargetType="CheckBox">
+      <Setter Property="Foreground" Value="@Texto"/>
+    </Style>
+    <Style TargetType="ProgressBar">
+      <Setter Property="Template">
+        <Setter.Value>
+          <ControlTemplate TargetType="ProgressBar">
+            <Border Background="@Pista" CornerRadius="3">
+              <Grid x:Name="PART_Track">
+                <Border x:Name="PART_Indicator" Background="@Acento" CornerRadius="3" HorizontalAlignment="Left"/>
+              </Grid>
+            </Border>
+          </ControlTemplate>
+        </Setter.Value>
+      </Setter>
+    </Style>
+
+    <DataTemplate x:Key="FilaPlantilla">
+      <Border Background="@Superficie" CornerRadius="8" Padding="16,12" Margin="0,0,0,8">
+        <Grid>
+          <Grid.ColumnDefinitions>
+            <ColumnDefinition Width="Auto"/><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/><ColumnDefinition Width="Auto"/>
+          </Grid.ColumnDefinitions>
+          <TextBlock Text="{Binding Icono}" FontFamily="Segoe MDL2 Assets" FontSize="20" Foreground="{Binding ColorIcono}" VerticalAlignment="Center" Margin="2,0,16,0"/>
+          <StackPanel Grid.Column="1" VerticalAlignment="Center">
+            <TextBlock Text="{Binding Nombre}" FontWeight="SemiBold" FontSize="14" TextTrimming="CharacterEllipsis"/>
+            <TextBlock Text="{Binding Detalle}" Foreground="@Tenue" FontSize="12" TextTrimming="CharacterEllipsis" Margin="0,2,0,0"/>
+          </StackPanel>
+          <Border Grid.Column="2" CornerRadius="10" Padding="9,2" Margin="12,0,14,0" VerticalAlignment="Center" Background="{Binding FondoEstado}">
+            <TextBlock Text="{Binding Estado}" FontSize="11.5" Foreground="{Binding ColorEstado}"/>
+          </Border>
+          <StackPanel Grid.Column="3" Orientation="Horizontal" VerticalAlignment="Center">
+            <Button Uid="principal" Tag="{Binding}" Content="{Binding TextoPrincipal}" Style="{StaticResource Boton}" MinWidth="118"/>
+            <Button Uid="mas" Tag="{Binding}" Content="&#xE712;" Style="{StaticResource BotonIcono}" Margin="8,0,0,0" ToolTip="Más opciones"/>
+          </StackPanel>
+        </Grid>
+      </Border>
+    </DataTemplate>
+  </Window.Resources>
+
+  <Grid Background="@Fondo">
+    <Grid Margin="32,26,32,20">
+      <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="*"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
+
+      <DockPanel>
+        <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" VerticalAlignment="Center">
+          <Button x:Name="BtnCorreo" Style="{StaticResource BotonSecundario}" Content="Correo de recuperación" Margin="0,0,8,0"/>
+          <Button x:Name="BtnProteger" Style="{StaticResource Boton}" Content="Proteger una carpeta"/>
+        </StackPanel>
+        <StackPanel>
+          <TextBlock Text="Candado" Style="{StaticResource Titulo}"/>
+          <TextBlock x:Name="Subtitulo" Text="Contraseña para tus carpetas, sin moverlas de donde están" Style="{StaticResource Tenue}" Margin="0,2,0,0"/>
+        </StackPanel>
+      </DockPanel>
+
+      <Border x:Name="AvisoCorreo" Grid.Row="1" Background="@FondoAviso" CornerRadius="8" Padding="14,10" Margin="0,18,0,0" Visibility="Collapsed">
+        <DockPanel>
+          <Button x:Name="BtnAvisoCorreo" DockPanel.Dock="Right" Style="{StaticResource BotonEnlace}" Content="Configurar" Foreground="@TextoAviso" FontWeight="SemiBold"/>
+          <TextBlock Foreground="@TextoAviso" TextWrapping="Wrap" Margin="0,0,12,0" Text="Todavía no configuraste el correo de recuperación: si olvidas una contraseña, la clave solo te la habré mostrado en pantalla."/>
+        </DockPanel>
+      </Border>
+
+      <ScrollViewer Grid.Row="2" Margin="0,18,0,0" VerticalScrollBarVisibility="Auto">
+        <StackPanel>
+          <ItemsControl x:Name="Lista" ItemTemplate="{StaticResource FilaPlantilla}"/>
+          <Border x:Name="Vacio" Background="@Superficie" CornerRadius="8" Padding="28,34" Visibility="Collapsed">
+            <StackPanel HorizontalAlignment="Center">
+              <TextBlock Text="&#xE72E;" FontFamily="Segoe MDL2 Assets" FontSize="34" Foreground="@Acento" HorizontalAlignment="Center"/>
+              <TextBlock Text="Todavía no protegiste ninguna carpeta" FontWeight="SemiBold" FontSize="15" HorizontalAlignment="Center" Margin="0,12,0,4"/>
+              <TextBlock Style="{StaticResource Tenue}" TextAlignment="Center" MaxWidth="460" Text="Elige una carpeta y ponle una contraseña. Se queda donde está: bloqueada, sus archivos se guardan cifrados; al desbloquearla vuelven a estar como siempre."/>
+            </StackPanel>
+          </Border>
+        </StackPanel>
+      </ScrollViewer>
+
+      <Border x:Name="PanelProgreso" Grid.Row="3" Background="@Panel" CornerRadius="8" Padding="16,12" Margin="0,14,0,0" Visibility="Collapsed">
+        <DockPanel>
+          <Button x:Name="BtnCancelar" DockPanel.Dock="Right" Style="{StaticResource BotonSecundario}" Content="Cancelar" Margin="16,0,0,0" VerticalAlignment="Center"/>
+          <StackPanel>
+            <TextBlock x:Name="ProgresoTexto" FontWeight="SemiBold"/>
+            <ProgressBar x:Name="Barra" Height="6" Margin="0,8,0,6" Maximum="1000"/>
+            <TextBlock x:Name="ProgresoDetalle" Foreground="@Tenue" FontSize="12" TextTrimming="CharacterEllipsis"/>
+          </StackPanel>
+        </DockPanel>
+      </Border>
+    </Grid>
+
+    <Grid x:Name="Capa" Visibility="Collapsed" Background="@Velo">
+      <Border Background="@Panel" BorderBrush="@Borde" BorderThickness="1" CornerRadius="10" Padding="26,22" Width="460" HorizontalAlignment="Center" VerticalAlignment="Center">
+        <StackPanel>
+          <TextBlock x:Name="CapaTitulo" FontSize="17" FontWeight="SemiBold" TextWrapping="Wrap"/>
+          <TextBlock x:Name="CapaTexto" Style="{StaticResource Tenue}" Margin="0,6,0,0"/>
+          <ScrollViewer MaxHeight="370" VerticalScrollBarVisibility="Auto">
+            <StackPanel x:Name="CapaCampos" Margin="0,4,0,0"/>
+          </ScrollViewer>
+          <TextBlock x:Name="CapaMensaje" TextWrapping="Wrap" Margin="0,12,0,0" Visibility="Collapsed"/>
+          <DockPanel Margin="0,20,0,0" LastChildFill="False">
+            <Button x:Name="CapaEnlace" DockPanel.Dock="Left" Style="{StaticResource BotonEnlace}" Visibility="Collapsed"/>
+            <Button x:Name="CapaPrincipal" DockPanel.Dock="Right" Style="{StaticResource Boton}"/>
+            <Button x:Name="CapaSecundario" DockPanel.Dock="Right" Style="{StaticResource BotonSecundario}" Content="Cancelar" Margin="0,0,8,0"/>
+          </DockPanel>
+        </StackPanel>
+      </Border>
+    </Grid>
+  </Grid>
+</Window>
