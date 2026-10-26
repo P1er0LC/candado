@@ -89,6 +89,13 @@ namespace Candado
             Refrescar();
             if (captura == null && filas.Any(f => f.CadaVez)) Programa.AsegurarVigilante();
 
+            // El vigilante y la ventanita bloquean y desbloquean sin pasar por aquí: la lista se
+            // pone al día sola cada dos segundos y al volver a la ventana.
+            DispatcherTimer alDia = new DispatcherTimer { Interval = TimeSpan.FromSeconds(2) };
+            alDia.Tick += delegate { PonerAlDia(); };
+            alDia.Start();
+            Window.Activated += delegate { PonerAlDia(); };
+
             if (captura == null && carpetaInicial != null)
                 Window.ContentRendered += delegate { AbrirCarpeta(carpetaInicial); };
             if (captura != null)
@@ -189,6 +196,13 @@ namespace Candado
         {
             PonerTipo(f, TipoDe(f.Ruta));
             MedirTamano(f);
+        }
+
+        void PonerAlDia()
+        {
+            if (ocupado) return;
+            foreach (Fila f in filas.ToList())
+                if (TipoDe(f.Ruta) != f.Tipo) ActualizarFila(f);
         }
 
         Fila FilaDe(string ruta)
@@ -836,6 +850,17 @@ namespace Candado
                     await AceptarCapa();
                     return;
                 case "flujo-bloquear": await Bloquear(abierta); await Esperar(); return;
+                case "al-dia":
+                    // Lo que hacen el vigilante (bloquear) y la ventanita (desbloquear) sin pasar
+                    // por aquí: la fila tiene que ponerse al día sola.
+                    string ruta = abierta.Ruta;
+                    await Task.Run(() => new Cofre(ruta).Bloquear(null, CancellationToken.None, false));
+                    await EsperarTipo(abierta, "bloqueada");
+                    await Task.Run(() => new Cofre(ruta).Desbloquear(ClaveDemo, null, CancellationToken.None));
+                    await EsperarTipo(abierta, "desbloqueada");
+                    await Task.Run(() => new Cofre(ruta).Bloquear(null, CancellationToken.None, false));
+                    await EsperarTipo(abierta, "bloqueada");
+                    return;
                 case "flujo-terminar": Terminar(media); await Esperar(); return;
                 case "flujo-proteger":
                     cfg.ContrasenaCerrada = "";   // que no intente mandar el correo de verdad
@@ -885,6 +910,12 @@ namespace Candado
         async Task Esperar()
         {
             while (ocupado) await Task.Delay(100);
+        }
+
+        async Task EsperarTipo(Fila f, string tipo)
+        {
+            for (int i = 0; i < 60 && f.Tipo != tipo; i++) await Task.Delay(100);
+            if (f.Tipo != tipo) throw new Exception("«" + f.Nombre + "» no se puso al día: sigue " + f.Tipo + ", tendría que estar " + tipo + ".");
         }
 
         void Capturar(string ruta)

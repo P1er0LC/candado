@@ -59,7 +59,14 @@ Capturar 'mini-listo' $datos 'mini-listo-acceso' "--carpeta `"$w`""
 
 # El vigilante con el Explorador de verdad: al abrir «Vigilada» sale la ventanita (aquí pone
 # sola la contraseña de prueba) y al cerrar la ventana la carpeta se vuelve a bloquear.
-function Estado([string]$Dir) { (Get-Content -LiteralPath "$Dir\.candado\cabecera.json" -Raw | ConvertFrom-Json).Estado }
+function Estado([string]$Dir) {
+    # El vigilante puede estar reescribiéndola justo en ese momento.
+    for ($i = 0; $i -lt 20; $i++) {
+        try { return (Get-Content -LiteralPath "$Dir\.candado\cabecera.json" -Raw -ErrorAction Stop | ConvertFrom-Json).Estado }
+        catch { Start-Sleep -Milliseconds 50 }
+    }
+    'ilegible'
+}
 function Esperar([string]$Dir, [string]$Estado) {
     $t = [Diagnostics.Stopwatch]::StartNew()
     while ((Estado $Dir) -ne $Estado -and $t.Elapsed.TotalSeconds -lt 30) { Start-Sleep -Milliseconds 300 }
@@ -97,4 +104,6 @@ $vacio = Join-Path $Salida 'vacio'
 New-Item -ItemType Directory -Force $vacio | Out-Null
 Remove-Item "$vacio\config.json" -ErrorAction SilentlyContinue
 foreach ($p in 'lista', 'proteger', 'recuperar', 'correo') { Capturar $p $vacio "vacio-$p" }
+# La lista se pone al día sola cuando otro (el vigilante, la ventanita) bloquea o desbloquea.
+Capturar 'al-dia'
 "Capturas en $Salida"

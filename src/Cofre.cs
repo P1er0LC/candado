@@ -111,7 +111,7 @@ namespace Candado
         {
             Carpeta = Normalizar(carpeta);
             if (!File.Exists(RutaCabecera)) throw new ErrorCandado("Esta carpeta no está protegida con Candado.");
-            Cabecera = Json.Leer<Cabecera>(File.ReadAllBytes(RutaCabecera));
+            Cabecera = Json.Leer<Cabecera>(LeerCompartido(RutaCabecera));
         }
 
         // Sin la barra final, salvo en la raíz de un disco: «D:» a secas es la carpeta actual de D:.
@@ -164,7 +164,7 @@ namespace Candado
             {
                 try { reserva = new FileStream(Path.Combine(DirCandado, "ocupada"), FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None, 1, FileOptions.DeleteOnClose); }
                 catch (IOException) { throw new ErrorCandado("Candado ya está trabajando con esta carpeta: espera a que termine."); }
-                try { Cabecera = Json.Leer<Cabecera>(File.ReadAllBytes(RutaCabecera)); }
+                try { Cabecera = Json.Leer<Cabecera>(LeerCompartido(RutaCabecera)); }
                 catch { reserva.Dispose(); reserva = null; throw; }
             }
             reservas++;
@@ -933,8 +933,39 @@ namespace Candado
                 f.Flush(true);
             }
             if (!File.Exists(ruta)) { File.Move(tmp, ruta); return; }
-            try { File.Replace(tmp, ruta, null); }
-            catch (IOException) { File.Delete(ruta); File.Move(tmp, ruta); }   // discos que no son NTFS
+            for (int i = 0; ; i++)
+            {
+                try { File.Replace(tmp, ruta, null); return; }
+                catch (IOException ex)
+                {
+                    // 32, 33 y 1175: alguien la está leyendo justo ahora (el vigilante, la ventana,
+                    // un antivirus); se espera un poco. Otro error: un disco que no es NTFS.
+                    int codigo = ex.HResult & 0xFFFF;
+                    if ((codigo == 32 || codigo == 33 || codigo == 1175) && i < 40) { Thread.Sleep(25); continue; }
+                    File.Delete(ruta);
+                    File.Move(tmp, ruta);
+                    return;
+                }
+            }
+        }
+
+        // Otro proceso puede estar reemplazándola en este momento: se lee sin impedírselo y, si
+        // justo coincide, se reintenta.
+        static byte[] LeerCompartido(string ruta)
+        {
+            for (int i = 0; ; i++)
+            {
+                try
+                {
+                    using (FileStream f = new FileStream(ruta, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete))
+                    using (MemoryStream m = new MemoryStream())
+                    {
+                        f.CopyTo(m);
+                        return m.ToArray();
+                    }
+                }
+                catch (IOException) { if (i >= 20) throw; Thread.Sleep(25); }
+            }
         }
     }
 
