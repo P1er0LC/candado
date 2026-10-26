@@ -2,12 +2,27 @@
 
 Contraseña para carpetas de Windows, sin moverlas de donde están.
 
-Bloqueada, una carpeta se ve en el Explorador con un candado en el ícono, y adentro solo
-tiene una nota y la carpeta oculta `.candado` con sus archivos cifrados. Desbloqueada,
-vuelve a estar como siempre, con sus nombres, fechas y atributos. Si olvidas la
-contraseña, la recuperas con una clave que te llega por correo.
+Bloqueada, una carpeta se ve en el Explorador con un candado en el ícono, y nadie puede ver
+lo que tiene adentro. Desbloqueada, vuelve a estar como siempre, con sus nombres, fechas y
+atributos. Si olvidas la contraseña, la recuperas con una clave que te llega por correo.
 
 ![Lista de carpetas protegidas](docs/lista.png)
+
+## Dos formas de proteger una carpeta
+
+Se elige al protegerla:
+
+| | **Cifrar los archivos** (recomendado) | **Solo bloquear el acceso** |
+|---|---|---|
+| Qué hace al bloquear | Cifra cada archivo dentro de la carpeta oculta `.candado` y borra los originales | Pone un permiso de Windows que le niega a todos abrir, listar, escribir o borrar lo de adentro |
+| Los archivos | Quedan cifrados: sin la contraseña son ruido | No se tocan: siguen ahí, tal cual |
+| Si alguien se lleva el disco o tiene permisos de administrador | No puede ver nada | Puede entrar quitando el permiso (Propiedades → Seguridad) |
+| Bloquear y desbloquear | Tarda según cuánto pese (1 minuto cada 2–3 GB en un disco mecánico) | Al instante, pese lo que pese |
+
+El modo acceso sirve para que alguien que usa tu PC no abra una carpeta por descuido o por
+curiosidad. Para algo que de verdad tiene que quedar privado, usa el cifrado.
+
+<img src="docs/proteger.png" alt="Elegir cómo proteger una carpeta" width="70%">
 
 ## Qué hace
 
@@ -79,6 +94,9 @@ solo aparece en pantalla.
 
 ## Cómo protege
 
+- Las dos formas comparten la contraseña, la clave de recuperación por correo, el clic
+  derecho y el ícono. En el modo acceso la llave no cifra nada: solo sirve para comprobar
+  la contraseña o la clave antes de quitar el permiso.
 - Cada carpeta tiene una llave de datos al azar. Cada archivo se cifra con AES-256-CBC y se
   autentica con HMAC-SHA256; los nombres y las rutas van en un índice cifrado, y los
   archivos cifrados tienen nombres al azar.
@@ -108,6 +126,23 @@ puede abrirla: conviene tener activada la verificación en dos pasos en la cuent
   personales enteras (Documentos, Escritorio, Imágenes…), las que están en OneDrive y las
   que tienen enlaces o uniones adentro.
 - **Correo:** se conecta con STARTTLS (puerto 587); el 465 no lo admite.
+- **Modo acceso:** tu cuenta de Windows tiene que ser la dueña de la carpeta (si no lo es,
+  Candado intenta serlo, y si no puede, te pide usar el cifrado). Mientras está bloqueada,
+  tampoco la ven la búsqueda de Windows, los respaldos ni el antivirus. Al bloquearla, NTFS
+  le marca el atributo «Archivo» a los archivos que no lo tenían; el contenido y las fechas
+  no cambian.
+
+### Abrir a mano una carpeta en modo acceso
+
+Si algún día te quedas sin Candado y una carpeta quedó bloqueada en modo acceso, se abre
+sacándole el permiso. En PowerShell:
+
+```powershell
+icacls "D:\la carpeta" /remove:d *S-1-1-0
+```
+
+(`S-1-1-0` es «Todos»). Con el cifrado esto no sirve: sin Candado y la contraseña o la
+clave, los archivos no se pueden leer.
 
 ## Desarrollo
 
@@ -121,7 +156,7 @@ pruebas/          pruebas del núcleo
 
 ```powershell
 .\compilar.ps1                             # dist\Candado.exe y dist\pruebas.exe
-.\dist\pruebas.exe D:\candado-pruebas      # 17 pruebas: ida y vuelta, cortes, alteraciones, correo falso
+.\dist\pruebas.exe D:\candado-pruebas      # 19 pruebas: los dos modos, cortes, alteraciones, correo falso
 .\probar-ventana.ps1                       # capturas de cada pantalla y flujos reales con datos de demo
 ```
 

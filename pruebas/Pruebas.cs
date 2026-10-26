@@ -41,6 +41,7 @@ static class Pruebas
         Probar("Clave de recuperación: formato y normalización", ProbarClave);
         Probar("Bloquear y desbloquear: todo vuelve idéntico", ProbarIdaVuelta);
         Probar("Carpeta con su propio ícono (desktop.ini)", ProbarDesktopIniPropio);
+        Probar("Solo bloquear el acceso: nadie entra y los archivos no se tocan", ProbarAcceso);
         Probar("Contraseña equivocada no cambia nada", ProbarContrasenaMala);
         Probar("Bloquear de nuevo sin contraseña (cuenta de Windows)", ProbarSinContrasena);
         Probar("Recuperar con la clave y contraseña nueva", ProbarRecuperacion);
@@ -108,7 +109,11 @@ static class Pruebas
     }
 
     // Huella de todo: ruta, SHA-256, fechas y atributos, más las carpetas.
-    static string Huella(string carpeta)
+    static string Huella(string carpeta) { return Huella(carpeta, false); }
+
+    // sinArchivo: en el modo acceso, NTFS le pone el atributo «Archivo» a lo que no lo tenía
+    // al cambiarle los permisos (es la marca de «cambió» que usan los respaldos).
+    static string Huella(string carpeta, bool sinArchivo)
     {
         StringBuilder s = new StringBuilder();
         using (SHA256 sha = SHA256.Create())
@@ -116,12 +121,19 @@ static class Pruebas
             foreach (string f in Directory.GetFiles(carpeta, "*", SearchOption.AllDirectories).Where(x => !x.Contains("\\" + Cofre.NombreDir + "\\")).OrderBy(x => x, StringComparer.Ordinal))
             {
                 FileInfo fi = new FileInfo(f);
-                s.AppendLine(string.Format("{0}|{1}|{2}|{3}|{4}", f.Substring(carpeta.Length), BitConverter.ToString(sha.ComputeHash(File.ReadAllBytes(f))), fi.CreationTimeUtc.Ticks, fi.LastWriteTimeUtc.Ticks, fi.Attributes));
+                s.AppendLine(string.Format("{0}|{1}|{2}|{3}|{4}", f.Substring(carpeta.Length), BitConverter.ToString(sha.ComputeHash(File.ReadAllBytes(f))), fi.CreationTimeUtc.Ticks, fi.LastWriteTimeUtc.Ticks,
+                    sinArchivo ? fi.Attributes & ~FileAttributes.Archive : fi.Attributes));
             }
         }
         foreach (string d in Directory.GetDirectories(carpeta, "*", SearchOption.AllDirectories).Where(x => !x.Contains("\\" + Cofre.NombreDir)).OrderBy(x => x, StringComparer.Ordinal))
             s.AppendLine("dir " + d.Substring(carpeta.Length));
         return s.ToString();
+    }
+
+    static string Diferencia(string a, string b)
+    {
+        string[] x = a.Split('\n'), y = b.Split('\n');
+        return "faltan [" + string.Join(" ; ", x.Except(y).Take(3)) + "] sobran [" + string.Join(" ; ", y.Except(x).Take(3)) + "]";
     }
 
     static List<string> FueraDelCofre(string carpeta)
@@ -194,6 +206,40 @@ static class Pruebas
         Afirmar(!File.Exists(Path.Combine(c, Cofre.NombreIni)), "quedó el desktop.ini");
         Afirmar(new DirectoryInfo(c).Attributes == atributos, "los atributos de la carpeta no volvieron: " + new DirectoryInfo(c).Attributes);
         Afirmar(new Cofre(c).Cabecera.AtributosCarpeta == null, "quedaron anotados los atributos");
+    }
+
+    static void ProbarAcceso()
+    {
+        string c = NuevaCarpeta("solo acceso");
+        string antes = Huella(c, true);
+        FileAttributes atributos = new DirectoryInfo(c).Attributes;
+        string clave = Cofre.Crear(c, Clave1, null, true);
+        Afirmar(new Cofre(c).SoloAcceso, "no quedó en modo acceso");
+        Stopwatch r = Stopwatch.StartNew();
+        new Cofre(c).Bloquear(null, Nada, false);   // no pide la contraseña
+        double segundos = r.Elapsed.TotalSeconds;
+        Cofre k = new Cofre(c);   // la cabecera se sigue leyendo con la carpeta bloqueada
+        Afirmar(k.Estado == Estados.Bloqueada, "estado " + k.Estado);
+        Afirmar(!Directory.Exists(Path.Combine(c, Cofre.NombreDir, "datos")), "cifró algo");
+        Espera<UnauthorizedAccessException>(() => Directory.GetFiles(c), null);
+        Espera<UnauthorizedAccessException>(() => File.ReadAllBytes(Path.Combine(c, "archivo 5.bin")), null);
+        Espera<UnauthorizedAccessException>(() => File.ReadAllText(Path.Combine(c, "Fotos ñandú", "notas.txt")), null);
+        Espera<UnauthorizedAccessException>(() => File.Delete(Path.Combine(c, "archivo 5.bin")), null);
+        Espera<UnauthorizedAccessException>(() => File.WriteAllText(Path.Combine(c, "nuevo.txt"), "x"), null);
+        Afirmar(Cofre.EsNuestroIni(Path.Combine(c, Cofre.NombreIni)), "el Explorador no podría leer el desktop.ini del ícono");
+        Afirmar(k.Tamano() > 5000000, "no recordó el tamaño: " + k.Tamano());
+        Espera<ErrorCandado>(() => new Cofre(c).Desbloquear("otra-contraseña", null, Nada), "no es correcta");
+        new Cofre(c).Desbloquear(Clave1, null, Nada);
+        Afirmar(Huella(c, true) == antes, "los archivos cambiaron: " + Diferencia(antes, Huella(c, true)));
+        Afirmar(new DirectoryInfo(c).Attributes == atributos, "los atributos de la carpeta no volvieron");
+        Afirmar(!new FileInfo(Path.Combine(c, "archivo 5.bin")).GetAccessControl().GetAccessRules(true, true, typeof(System.Security.Principal.SecurityIdentifier))
+            .Cast<System.Security.AccessControl.FileSystemAccessRule>().Any(x => x.AccessControlType == System.Security.AccessControl.AccessControlType.Deny), "quedó una negación en un archivo");
+        new Cofre(c).Bloquear(null, Nada, false);
+        new Cofre(c).Recuperar(clave, "nueva-contraseña", null, Nada);
+        Afirmar(Huella(c, true) == antes, "los archivos cambiaron al recuperar");
+        new Cofre(c).QuitarProteccion();
+        Afirmar(!Cofre.EstaProtegida(c), "sigue protegida");
+        Console.WriteLine("      bloquear en modo acceso: {0:N2} s", segundos);
     }
 
     // Una carpeta con su propio ícono: el suyo se cifra con lo demás y vuelve al desbloquear.
@@ -533,8 +579,13 @@ static class Pruebas
         Cofre.PruebaFallarTras = 4;
         try { new Cofre(c).Desbloquear(Clave1, null, Nada); } catch (ErrorCandado) { }
         Cofre.PruebaFallarTras = -1;
+        string d = NuevaCarpeta("Contratos (solo acceso)");
+        Cofre.Crear(d, Clave1, null, true);
+        new Cofre(d).Bloquear(null, Nada, false);
+        cfg.Carpetas.Add(d);
         cfg.Carpetas.Add(Path.Combine(dir, "Contratos viejos"));
-        NuevaCarpeta("Para proteger");   // la usa la captura «flujo-proteger»
+        NuevaCarpeta("Para proteger");            // la usa la captura «flujo-proteger»
+        NuevaCarpeta("Para proteger (acceso)");   // y esta «flujo-proteger-acceso»
         Datos.Guardar(cfg);
         Console.WriteLine("demo lista en " + dir);
         return 0;
@@ -568,8 +619,19 @@ static class Pruebas
         return 0;
     }
 
+    // Una prueba que falla a la mitad puede dejar una carpeta en modo acceso: se le saca la
+    // negación antes de borrar.
+    static void QuitarBloqueos(string d)
+    {
+        try { Cofre.QuitarNegaciones(d); } catch (Exception) { }
+        string[] hijas;
+        try { hijas = Directory.GetDirectories(d); } catch (Exception) { return; }
+        foreach (string h in hijas) QuitarBloqueos(h);
+    }
+
     static void BorrarTodo(string d)
     {
+        QuitarBloqueos(d);
         foreach (string f in Directory.GetFiles(d, "*", SearchOption.AllDirectories)) File.SetAttributes(f, FileAttributes.Normal);
         foreach (string x in Directory.GetDirectories(d, "*", SearchOption.AllDirectories)) new DirectoryInfo(x).Attributes = FileAttributes.Directory;
         Directory.Delete(d, true);

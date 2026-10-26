@@ -35,6 +35,7 @@ namespace Candado
         public string Ruta { get; set; }
         public string Nombre { get; set; }
         public string Tipo { get; set; }   // bloqueada | desbloqueada | interrumpida | perdida | sinproteccion
+        public bool SoloAcceso { get; set; }
         public string Detalle { get { return detalle; } set { detalle = value; Avisar("Detalle"); } }
         public string Estado { get { return estado; } set { estado = value; Avisar("Estado"); } }
         public string FondoEstado { get { return fondoEstado; } set { fondoEstado = value; Avisar("FondoEstado"); } }
@@ -59,7 +60,7 @@ namespace Candado
         string nombreEnCurso;
         DispatcherTimer ocultarProgreso;
         readonly string carpetaInicial;
-        bool recibioCarpeta;
+        bool recibioCarpeta, enCaptura;
 
         const string IconoCandado = "\uE72E", IconoAbierto = "\uE785", IconoAviso = "\uE7BA", IconoCarpeta = "\uE8B7";
 
@@ -116,8 +117,11 @@ namespace Candado
                 Window.ContentRendered += delegate { AbrirCarpeta(carpetaInicial); };
             if (captura != null)
             {
+                // Fuera de la pantalla y sin activarse: si no, se queda con el teclado de quien
+                // esté usando la PC mientras corren las pruebas.
+                enCaptura = true;
                 Window.WindowStartupLocation = WindowStartupLocation.Manual;
-                Window.Left = -20000; Window.Top = 0; Window.ShowInTaskbar = false;
+                Window.Left = -20000; Window.Top = 0; Window.ShowInTaskbar = false; Window.ShowActivated = false;
                 Window.ContentRendered += async delegate
                 {
                     try { await Pantalla(pantalla); }
@@ -157,6 +161,7 @@ namespace Candado
         Fila NuevaFila(string ruta)
         {
             Fila f = new Fila { Ruta = ruta, Nombre = Path.GetFileName(ruta), Detalle = ruta };
+            try { f.SoloAcceso = Cofre.EstaProtegida(ruta) && new Cofre(ruta).SoloAcceso; } catch (Exception) { }
             PonerTipo(f, TipoDe(ruta));
             return f;
         }
@@ -194,7 +199,10 @@ namespace Candado
             if (f.Tipo == "perdida" || f.Tipo == "sinproteccion") return;
             string ruta = f.Ruta;
             Task.Run(() => { try { return new Cofre(ruta).Tamano(); } catch { return -1L; } })
-                .ContinueWith(t => Window.Dispatcher.BeginInvoke(new Action(() => { f.Detalle = ruta + "  ·  " + Tamano(t.Result); })));
+                .ContinueWith(t => Window.Dispatcher.BeginInvoke(new Action(() =>
+                {
+                    f.Detalle = ruta + "  ·  " + Tamano(t.Result) + (f.SoloAcceso ? "  ·  solo bloquea el acceso" : "");
+                })));
         }
 
         void ActualizarFila(Fila f)
@@ -260,6 +268,7 @@ namespace Candado
 
         public void Traer()
         {
+            if (enCaptura) return;
             if (Window.WindowState == WindowState.Minimized) Window.WindowState = WindowState.Normal;
             Window.Activate();
             Window.Topmost = true;
@@ -283,7 +292,7 @@ namespace Candado
             l.Visibility = Visibility.Collapsed;
             alAceptar = aceptar; alCancelar = null; alEnlace = null;
             E<Grid>("Capa").Visibility = Visibility.Visible;
-            Window.Dispatcher.BeginInvoke(DispatcherPriority.Input, new Action(() =>
+            if (!enCaptura) Window.Dispatcher.BeginInvoke(DispatcherPriority.Input, new Action(() =>
             {
                 Control primero = E<StackPanel>("CapaCampos").Children.OfType<Control>().FirstOrDefault(x => (x is PasswordBox || x is TextBox) && !(x is TextBox && ((TextBox)x).IsReadOnly));
                 if (primero != null) primero.Focus();
@@ -324,6 +333,16 @@ namespace Candado
             CheckBox c = new CheckBox { IsChecked = valor, Margin = new Thickness(0, 14, 0, 0), Content = new TextBlock { Text = texto, TextWrapping = TextWrapping.Wrap } };
             E<StackPanel>("CapaCampos").Children.Add(c);
             return c;
+        }
+
+        RadioButton CampoOpcion(string titulo, string detalle, bool marcada)
+        {
+            StackPanel contenido = new StackPanel();
+            contenido.Children.Add(new TextBlock { Text = titulo, FontWeight = FontWeights.SemiBold });
+            contenido.Children.Add(new TextBlock { Text = detalle, Style = (Style)Window.FindResource("Tenue"), FontSize = 12, Margin = new Thickness(0, 3, 0, 0) });
+            RadioButton r = new RadioButton { Content = contenido, IsChecked = marcada, GroupName = "modo", Style = (Style)Window.FindResource("Opcion") };
+            E<StackPanel>("CapaCampos").Children.Add(r);
+            return r;
         }
 
         Button CampoBoton(string texto, string estilo, Action accion)
@@ -486,18 +505,22 @@ namespace Candado
             string correo = cfg.CorreoListo
                 ? "Si la olvidas, la recuperas con la clave que te llega a " + cfg.Destinatario + "."
                 : "Todavía no configuraste el correo: la clave de recuperación solo la vas a ver en pantalla.";
-            Capa("Proteger «" + Path.GetFileName(ruta) + "»",
-                ruta + "\n\nSe queda donde está. Bloqueada, sus archivos se guardan cifrados ahí mismo. " + correo,
-                "Proteger", null);
+            Capa("Proteger «" + Path.GetFileName(ruta) + "»", ruta + "\n\nSe queda donde está. " + correo, "Proteger", null);
+            Etiqueta("Cómo protegerla");
+            RadioButton cifrar = CampoOpcion("Cifrar los archivos",
+                "Sin la contraseña nadie puede verlos, ni llevándose el disco. Bloquear y desbloquear tarda según cuánto pese.", true);
+            RadioButton acceso = CampoOpcion("Solo bloquear el acceso",
+                "Al instante y sin tocar los archivos, pero alguien con permisos de administrador o que sepa cambiar permisos puede entrar igual.", false);
             PasswordBox p1 = CampoClave("Contraseña (al menos " + Cofre.LargoMinimo + " caracteres)");
             PasswordBox p2 = CampoClave("Repítela");
             alAceptar = async () =>
             {
                 ValidarNueva(p1.Password, p2.Password);
                 string clave1 = p1.Password;
+                bool soloAcceso = acceso.IsChecked == true;
                 Mensaje("Preparando…", false);
                 List<string> otras = cfg.Carpetas.ToList();
-                string clave = await Task.Run(() => Cofre.Crear(ruta, clave1, otras));
+                string clave = await Task.Run(() => Cofre.Crear(ruta, clave1, otras, soloAcceso));
                 Datos.Agregar(cfg, ruta);
                 Refrescar();
                 string envio = null;
@@ -635,7 +658,9 @@ namespace Candado
 
         void Opciones(Fila f)
         {
-            Capa(f.Nombre, f.Ruta, null, null, "Cerrar");
+            string modo = f.Tipo == "perdida" || f.Tipo == "sinproteccion" ? ""
+                : f.SoloAcceso ? "\nSolo bloquea el acceso: sus archivos no están cifrados." : "\nSus archivos se cifran al bloquearla.";
+            Capa(f.Nombre, f.Ruta + modo, null, null, "Cerrar");
             if (Directory.Exists(f.Ruta))
                 CampoBoton("Abrir la carpeta", "BotonSecundario", () => { CerrarCapa(); Process.Start("explorer.exe", "\"" + f.Ruta + "\""); });
             if (f.Tipo == "bloqueada" || f.Tipo == "desbloqueada" || f.Tipo == "interrumpida")
@@ -815,6 +840,15 @@ namespace Candado
                     Campos<PasswordBox>()[0].Password = ClaveDemo; Campos<PasswordBox>()[1].Password = ClaveDemo;
                     await AceptarCapa();
                     await AceptarCapa();   // «Bloquear ahora» en el diálogo de la clave
+                    await Esperar();
+                    return;
+                case "flujo-proteger-acceso":
+                    cfg.ContrasenaCerrada = "";
+                    DialogoProteger(Cofre.Normalizar(Path.Combine(Path.GetDirectoryName(primera.Ruta), "Para proteger (acceso)")));
+                    Campos<RadioButton>()[1].IsChecked = true;
+                    Campos<PasswordBox>()[0].Password = ClaveDemo; Campos<PasswordBox>()[1].Password = ClaveDemo;
+                    await AceptarCapa();
+                    await AceptarCapa();
                     await Esperar();
                     return;
                 case "flujo-recuperar":

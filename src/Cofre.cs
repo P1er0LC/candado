@@ -9,12 +9,18 @@
 //
 // Nada se borra hasta que su versión cifrada está escrita y el índice confirmado, y cada
 // paso deja el estado en la cabecera: si se corta la luz, Reanudar termina lo empezado.
+//
+// En el modo «solo acceso» no se cifra nada: bloquear le agrega a la carpeta un permiso de
+// Windows que le niega a todos listar, abrir, escribir y borrar lo que tiene adentro. La
+// llave y la clave de recuperación siguen igual, como prueba de la contraseña.
 using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Runtime.Serialization;
 using System.Runtime.Serialization.Json;
+using System.Security.AccessControl;
+using System.Security.Principal;
 using System.Text;
 using System.Threading;
 
@@ -33,6 +39,8 @@ namespace Candado
         [DataMember] public string LlaveConWindows;       // solo mientras no está bloqueada
         [DataMember] public string Creada;
         [DataMember(EmitDefaultValue = false)] public int? AtributosCarpeta;   // los de antes de ponerle el ícono
+        [DataMember(EmitDefaultValue = false)] public string Modo;             // null o «cifrado», o «acceso»
+        [DataMember(EmitDefaultValue = false)] public long? TamanoBloqueada;   // modo acceso: lo que pesaba al bloquearla
     }
 
     [DataContract]
@@ -111,6 +119,9 @@ namespace Candado
             return File.Exists(Path.Combine(Normalizar(carpeta), NombreDir, "cabecera.json"));
         }
 
+        public const string ModoCifrado = "cifrado", ModoAcceso = "acceso";
+        public bool SoloAcceso { get { return Cabecera.Modo == ModoAcceso; } }
+
         public string Estado { get { return Cabecera.Estado; } }
         public bool Interrumpida { get { return Estado == Estados.Bloqueando || Estado == Estados.Desbloqueando; } }
 
@@ -163,12 +174,13 @@ namespace Candado
         }
 
         // Protege la carpeta (queda desbloqueada) y devuelve la clave de recuperación.
-        public static string Crear(string carpeta, string contrasena, IEnumerable<string> otras)
+        public static string Crear(string carpeta, string contrasena, IEnumerable<string> otras, bool soloAcceso = false)
         {
             Validar(carpeta, otras);
             ValidarContrasena(contrasena);
             string c = Normalizar(carpeta);
-            Recorrer(c);   // falla antes de tocar nada si hay enlaces o uniones adentro
+            if (soloAcceso) ComprobarDueno(c);
+            else Recorrer(c);   // falla antes de tocar nada si hay enlaces o uniones adentro
 
             byte[] llave = Cripto.Azar(64);
             byte[] sal = Cripto.Azar(16), salR = Cripto.Azar(16);
@@ -182,7 +194,8 @@ namespace Candado
                 SalRecuperacion = Convert.ToBase64String(salR),
                 LlaveConRecuperacion = Convert.ToBase64String(Cripto.Cerrar(Cripto.Derivar(Cripto.NormalizarClave(clave), salR, Cripto.IteracionesRecuperacion), llave)),
                 LlaveConWindows = Cripto.CerrarConWindows(llave),
-                Creada = DateTime.Now.ToString("o")
+                Creada = DateTime.Now.ToString("o"),
+                Modo = soloAcceso ? ModoAcceso : ModoCifrado
             };
             DirectoryInfo d = Directory.CreateDirectory(Path.Combine(c, NombreDir));
             d.Attributes |= FileAttributes.Hidden | FileAttributes.System;
@@ -222,7 +235,7 @@ namespace Candado
             return Cripto.AbrirConWindows(Cabecera.LlaveConWindows);
         }
 
-        public bool PuedeSinContrasena { get { return LlaveDeWindows() != null; } }
+        public bool PuedeSinContrasena { get { return (SoloAcceso && Estado != Estados.Bloqueada) || LlaveDeWindows() != null; } }
 
         public void PonerContrasena(byte[] llave, string nueva)
         {
@@ -243,6 +256,7 @@ namespace Candado
 
         public void Bloquear(Action<Progreso> avance, CancellationToken cancelar, bool sobrescribir)
         {
+            if (SoloAcceso) { if (Estado != Estados.Bloqueada) BloquearAcceso(avance); return; }   // no necesita la llave
             byte[] llave = LlaveDeWindows();
             if (llave == null) throw new ErrorCandado("Hace falta la contraseña para bloquearla.");
             Bloquear(llave, avance, cancelar, sobrescribir);
@@ -274,6 +288,12 @@ namespace Candado
 
         public void ReanudarConLlave(byte[] llave, Action<Progreso> avance, CancellationToken cancelar, bool sobrescribir)
         {
+            if (SoloAcceso)
+            {
+                if (Estado == Estados.Bloqueando) BloquearAcceso(avance);
+                else if (Estado == Estados.Desbloqueando) DesbloquearAcceso(llave, avance);
+                return;
+            }
             if (Estado == Estados.Bloqueando) Bloquear(llave, avance, cancelar, sobrescribir);
             else if (Estado == Estados.Desbloqueando) Desbloquear(llave, avance, cancelar);
         }
@@ -282,6 +302,7 @@ namespace Candado
         public long Tamano()
         {
             long total = 0;
+            if (SoloAcceso && Estado != Estados.Desbloqueada) return Cabecera.TamanoBloqueada ?? -1;   // bloqueada no se puede recorrer
             if (Estado == Estados.Bloqueada)
             {
                 if (Directory.Exists(DirDatos)) foreach (string f in Directory.GetFiles(DirDatos)) total += new FileInfo(f).Length;
@@ -298,6 +319,7 @@ namespace Candado
         public void QuitarProteccion()
         {
             if (Estado != Estados.Desbloqueada) throw new ErrorCandado("Primero desbloquéala.");
+            if (SoloAcceso) QuitarNegaciones(Carpeta);
             QuitarIcono();
             new DirectoryInfo(DirCandado).Attributes = FileAttributes.Directory;
             Directory.Delete(DirCandado, true);
@@ -309,6 +331,7 @@ namespace Candado
         {
             if (Estado == Estados.Bloqueada) return;
             if (Estado == Estados.Desbloqueando) throw new ErrorCandado("Hay un desbloqueo a medias: termínalo primero.");
+            if (SoloAcceso) { BloquearAcceso(avance); return; }
             Indice indice;
             if (Estado == Estados.Bloqueando && File.Exists(RutaIndice))
             {
@@ -402,6 +425,9 @@ namespace Candado
                 File.WriteAllBytes(icono, IconoCarpeta);
                 File.WriteAllText(ini, MarcaIni + "\r\n[.ShellClassInfo]\r\nIconResource=" + icono + ",0\r\nInfoTip=Bloqueada con Candado\r\n", Encoding.Unicode);
                 File.SetAttributes(ini, FileAttributes.Hidden | FileAttributes.System);
+                // En el modo acceso el permiso que bloquea se hereda: el desktop.ini va con los
+                // suyos propios para que el Explorador pueda leerlo y mostrar el ícono.
+                if (SoloAcceso) { FileSecurity s = File.GetAccessControl(ini); s.SetAccessRuleProtection(true, true); File.SetAccessControl(ini, s); }
                 DirectoryInfo d = new DirectoryInfo(Carpeta);
                 if (Cabecera.AtributosCarpeta == null) { Cabecera.AtributosCarpeta = (int)d.Attributes; GuardarCabecera(); }
                 d.Attributes |= FileAttributes.ReadOnly;
@@ -431,6 +457,88 @@ namespace Candado
 
         [System.Runtime.InteropServices.DllImport("shell32.dll", CharSet = System.Runtime.InteropServices.CharSet.Unicode)]
         static extern void SHChangeNotify(int evento, int banderas, string a, IntPtr b);
+
+        // ------------------------------------------------------------ modo «solo acceso»
+
+        static readonly SecurityIdentifier Todos = new SecurityIdentifier(WellKnownSidType.WorldSid, null);
+
+        // Lo que se le niega a todos (la cuenta del usuario incluida) en la carpeta y en todo lo
+        // de adentro. No se niega leer los permisos ni cambiarlos: así Candado puede sacar la
+        // regla al desbloquear, y también se puede sacar a mano desde Propiedades → Seguridad.
+        const FileSystemRights Negados = FileSystemRights.ListDirectory | FileSystemRights.Traverse | FileSystemRights.ReadExtendedAttributes
+            | FileSystemRights.CreateFiles | FileSystemRights.CreateDirectories | FileSystemRights.WriteExtendedAttributes
+            | FileSystemRights.DeleteSubdirectoriesAndFiles | FileSystemRights.Delete;
+
+        // Para poder sacar la regla después hay que ser dueño de la carpeta: si no, se intenta serlo.
+        static void ComprobarDueno(string carpeta)
+        {
+            SecurityIdentifier yo = WindowsIdentity.GetCurrent().User;
+            DirectorySecurity s = Directory.GetAccessControl(carpeta, AccessControlSections.Owner);
+            if (yo.Equals(s.GetOwner(typeof(SecurityIdentifier)))) return;
+            try { s.SetOwner(yo); Directory.SetAccessControl(carpeta, s); }
+            catch (Exception)
+            {
+                throw new ErrorCandado("Tu cuenta de Windows no es la dueña de esta carpeta, así que Candado no podría volver a abrirla en el modo «solo acceso». Usa el cifrado.");
+            }
+        }
+
+        void BloquearAcceso(Action<Progreso> avance)
+        {
+            Progreso p = new Progreso { Accion = "Bloqueando", Total = 1, Actual = "" };
+            if (avance != null) avance(p);
+            ComprobarDueno(Carpeta);
+            Cabecera.Estado = Estados.Bloqueando;
+            if (Cabecera.TamanoBloqueada == null)
+            {
+                long total = 0;
+                try { foreach (string f in Directory.EnumerateFiles(Carpeta, "*", SearchOption.AllDirectories)) if (!f.StartsWith(DirCandado + "\\")) total += new FileInfo(f).Length; }
+                catch (Exception) { total = -1; }
+                Cabecera.TamanoBloqueada = total;
+            }
+            GuardarCabecera();
+            // .candado con sus propios permisos, para que Candado pueda leer su cabecera con la carpeta bloqueada.
+            DirectorySecurity d = Directory.GetAccessControl(DirCandado);
+            d.SetAccessRuleProtection(true, true);
+            Directory.SetAccessControl(DirCandado, d);
+            PonerIcono();
+            DirectorySecurity s = Directory.GetAccessControl(Carpeta);
+            s.AddAccessRule(new FileSystemAccessRule(Todos, Negados, InheritanceFlags.ContainerInherit | InheritanceFlags.ObjectInherit, PropagationFlags.None, AccessControlType.Deny));
+            // Windows la propaga a todo lo de adentro. No toca contenidos ni fechas, pero NTFS le
+            // pone el atributo «Archivo» a lo que no lo tenía (marca de cambio para respaldos).
+            Directory.SetAccessControl(Carpeta, s);
+            Cabecera.LlaveConWindows = null;
+            Cabecera.Estado = Estados.Bloqueada;
+            GuardarCabecera();
+            p.Hechos = 1;
+            if (avance != null) avance(p);
+            AvisarExplorador(Carpeta);
+        }
+
+        void DesbloquearAcceso(byte[] llave, Action<Progreso> avance)
+        {
+            Progreso p = new Progreso { Accion = "Desbloqueando", Total = 1, Actual = "" };
+            if (avance != null) avance(p);
+            Cabecera.LlaveConWindows = Cripto.CerrarConWindows(llave);
+            Cabecera.Estado = Estados.Desbloqueando;
+            GuardarCabecera();
+            QuitarNegaciones(Carpeta);
+            QuitarIcono();
+            Cabecera.TamanoBloqueada = null;
+            Cabecera.Estado = Estados.Desbloqueada;
+            GuardarCabecera();
+            p.Hechos = 1;
+            if (avance != null) avance(p);
+        }
+
+        // Saca las reglas que niegan a «Todos» puestas directamente en la carpeta; las copias
+        // heredadas de adentro se van solas.
+        public static void QuitarNegaciones(string carpeta)
+        {
+            DirectorySecurity s = Directory.GetAccessControl(carpeta);
+            foreach (FileSystemAccessRule r in s.GetAccessRules(true, false, typeof(SecurityIdentifier)))
+                if (r.AccessControlType == AccessControlType.Deny && Todos.Equals(r.IdentityReference)) s.RemoveAccessRuleSpecific(r);
+            Directory.SetAccessControl(carpeta, s);
+        }
 
         // Que el Explorador vuelva a leer el ícono sin esperar a que el usuario pulse F5.
         static void AvisarExplorador(string carpeta)
@@ -509,6 +617,7 @@ namespace Candado
         public void Desbloquear(byte[] llave, Action<Progreso> avance, CancellationToken cancelar)
         {
             if (Estado == Estados.Desbloqueada) return;
+            if (SoloAcceso) { DesbloquearAcceso(llave, avance); return; }
             if (Estado == Estados.Bloqueando && !File.Exists(RutaIndice))
             {
                 // Bloqueo cortado antes de confirmar el índice: los originales siguen todos ahí.

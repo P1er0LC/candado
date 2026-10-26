@@ -31,6 +31,11 @@ Capturar 'flujo-terminar'
 'Fotos de sesiones terminada idéntica: ' + ((Huella "$demo\Fotos de sesiones") -eq $referencia)
 Capturar 'flujo-proteger'
 'Para proteger quedó sin archivos a la vista: ' + (@(Get-ChildItem "$demo\Para proteger" -Force | Where-Object { $_.Name -notin '.candado', 'Carpeta protegida con Candado.txt', 'desktop.ini' }).Count -eq 0)
+Capturar 'flujo-proteger-acceso'
+$acc = "$demo\Para proteger (acceso)"
+$negado = try { Get-ChildItem -LiteralPath $acc -ErrorAction Stop | Out-Null; $false } catch { $true }
+'Para proteger (acceso): no se puede listar: {0} · el contenido sigue intacto tras desbloquear: (ver pruebas del núcleo)' -f $negado
+Capturar 'proteger'
 Capturar 'lista' $datos 'lista-final'
 
 # Clic derecho: lo que llega con --carpeta.
